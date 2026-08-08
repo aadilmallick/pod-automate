@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ProductType } from './core/interfaces/providers'
 import { estimateMockups, estimateProducts } from './core/workflow'
-import { designArt, listingItems, productOptions, recentRuns, templateCatalog } from './data/catalog'
+import { productOptions } from './data/catalog'
+import { createDevSession, createRun, getAuthStatus, getDashboardCatalog, getRun, getRunListings, logout, type DashboardCatalog, type SessionUser } from './client/api'
 
 type View = 'dashboard' | 'workflows' | 'templates' | 'connections' | 'assets' | 'run'
 type WizardStep = 'start' | 'source' | 'review' | 'products' | 'destinations' | 'summary'
@@ -13,6 +14,8 @@ const navItems: Array<{ id: View; label: string; icon: string }> = [
   { id: 'connections', label: 'Connections', icon: '↗' },
   { id: 'assets', label: 'Asset library', icon: '◉' },
 ]
+
+const emptyCatalog: DashboardCatalog = { stats: { workflows: 0, assets: 0, readyListings: 0 }, runs: [], assets: [], templates: [], listings: [] }
 
 const wizardSteps: Array<{ id: WizardStep; label: string; number: string }> = [
   { id: 'start', label: 'Start', number: '01' },
@@ -28,13 +31,20 @@ function App() {
   const [wizardStep, setWizardStep] = useState<WizardStep>('start')
   const [showWizard, setShowWizard] = useState(false)
   const [source, setSource] = useState<'ai' | 'upload'>('ai')
+  const [selectedProvider, setSelectedProvider] = useState('openrouter')
   const [prompt, setPrompt] = useState('Funny cat designs for people who take their naps seriously')
   const [designCount, setDesignCount] = useState(12)
-  const [selectedDesigns, setSelectedDesigns] = useState<string[]>(designArt.slice(0, 6).map((design) => design.id))
+  const [selectedDesigns, setSelectedDesigns] = useState<string[]>([])
   const [selectedProducts, setSelectedProducts] = useState<ProductType[]>(['tshirt', 'hoodie', 'sweatshirt'])
-  const [selectedTemplates, setSelectedTemplates] = useState(templateCatalog.slice(0, 5))
+  const [selectedTemplates, setSelectedTemplates] = useState<DashboardCatalog['templates']>([])
+  const [catalog, setCatalog] = useState<DashboardCatalog>(emptyCatalog)
   const [destinations, setDestinations] = useState<string[]>(['etsy', 'download'])
   const [launched, setLaunched] = useState(false)
+  const [runId, setRunId] = useState<string | undefined>()
+  const [launchError, setLaunchError] = useState<string | undefined>()
+  const [authMode, setAuthMode] = useState<'development' | 'google'>('development')
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ id: string; name: string; url: string }>>([])
 
   const config = useMemo(() => ({
@@ -47,6 +57,33 @@ function App() {
   const products = estimateProducts(config)
   const mockups = estimateMockups(config)
   const currentStepIndex = wizardSteps.findIndex((step) => step.id === wizardStep)
+
+  useEffect(() => {
+    let active = true
+    async function loadWorkspace() {
+      try {
+        let status = await getAuthStatus()
+        if (status.mode === 'development' && !status.authenticated) {
+          await createDevSession()
+          status = await getAuthStatus()
+        }
+        if (!active) return
+        setAuthMode(status.mode)
+        setSessionUser(status.user)
+        if (status.authenticated) {
+          const workspaceCatalog = await getDashboardCatalog()
+          if (active) {
+            setCatalog(workspaceCatalog)
+            setSelectedTemplates((current) => current.length ? current : workspaceCatalog.templates)
+          }
+        }
+      } catch (error) {
+        if (active) setLaunchError(error instanceof Error ? error.message : 'Unable to load workspace')
+      }
+    }
+    void loadWorkspace()
+    return () => { active = false }
+  }, [])
 
   function openWizard() {
     setWizardStep('start')
@@ -63,10 +100,17 @@ function App() {
     if (previous) setWizardStep(previous.id)
   }
 
-  function launchWorkflow() {
-    setLaunched(true)
-    setShowWizard(false)
-    setActiveView('run')
+  async function launchWorkflow() {
+    setLaunchError(undefined)
+    try {
+      const response = await createRun({ name: 'Funny cat collection', prompt, count: source === 'ai' ? designCount : selectedDesigns.length, products: selectedProducts, destinations, provider: selectedProvider, templates: selectedTemplates })
+      setRunId(response.run.id)
+      setLaunched(true)
+      setShowWizard(false)
+      setActiveView('run')
+    } catch (error) {
+      setLaunchError(error instanceof Error ? error.message : 'Unable to queue workflow')
+    }
   }
 
   function handleFiles(files: FileList | null) {
@@ -82,11 +126,21 @@ function App() {
 
   function toggleTemplate(id: string) {
     setSelectedTemplates((current) => {
-      const template = templateCatalog.find((item) => item.id === id)
+      const template = catalog.templates.find((item) => item.id === id)
       if (!template) return current
       return current.some((item) => item.id === id) ? current.filter((item) => item.id !== id) : [...current, template]
     })
   }
+
+  async function signOut() {
+    await logout().catch(() => undefined)
+    setSessionUser(null)
+    setProfileMenuOpen(false)
+    setCatalog(emptyCatalog)
+    window.location.reload()
+  }
+
+  const activeCatalog = catalog
 
   return (
     <div className="app-shell">
@@ -128,15 +182,15 @@ function App() {
       <main className="main-content">
         <header className="topbar">
           <div className="breadcrumbs"><span>Workspace</span><b>/</b><strong>{activeView === 'dashboard' ? 'Overview' : navItems.find((item) => item.id === activeView)?.label}</strong></div>
-          <div className="top-actions"><button className="icon-button" aria-label="Search">⌕</button><button className="icon-button notification" aria-label="Notifications">♧<i /></button><div className="top-avatar">AM</div></div>
+          <div className="top-actions"><button className="icon-button" aria-label="Search">⌕</button><button className="icon-button notification" aria-label="Notifications">♧<i /></button>{authMode === 'google' && !sessionUser && <a className="login-link" href="/api/auth/google">Sign in with Google</a>}<div className="profile-menu-wrap"><button className="top-avatar profile-trigger" aria-label="Open profile menu" aria-expanded={profileMenuOpen} onClick={() => setProfileMenuOpen((open) => !open)}>{sessionUser?.name?.slice(0, 2).toUpperCase() ?? 'AM'}</button>{profileMenuOpen && <div className="profile-menu"><div className="profile-menu-user"><strong>{sessionUser?.name ?? 'Local workspace'}</strong><small>{sessionUser?.email ?? 'Not signed in'}</small></div><button onClick={() => void signOut()}>Sign out <span>↗</span></button></div>}</div></div>
         </header>
 
-        {activeView === 'dashboard' && <Dashboard        onCreate={openWizard} launched={launched} onViewRun={() => setActiveView('run')} />}
-        {activeView === 'workflows' && <Workflows onCreate={openWizard} />}
-        {activeView === 'templates' && <Templates onCreate={openWizard} />}
+        {activeView === 'dashboard' && <Dashboard catalog={activeCatalog} onCreate={openWizard} launched={launched} launchError={launchError} onViewRun={() => setActiveView('run')} />}
+        {activeView === 'workflows' && <Workflows catalog={activeCatalog} onCreate={openWizard} />}
+        {activeView === 'templates' && <Templates catalog={activeCatalog} onCreate={openWizard} />}
         {activeView === 'connections' && <Connections />}
-        {activeView === 'assets' && <Assets />}
-        {activeView === 'run' && <RunMonitor onDashboard={() => setActiveView('dashboard')} />}
+        {activeView === 'assets' && <Assets catalog={activeCatalog} />}
+        {activeView === 'run' && <RunMonitor catalog={activeCatalog} onDashboard={() => setActiveView('dashboard')} runId={runId} />}
       </main>
 
       {showWizard && <WizardModal
@@ -144,6 +198,8 @@ function App() {
         currentStepIndex={currentStepIndex}
         source={source}
         setSource={setSource}
+        selectedProvider={selectedProvider}
+        setSelectedProvider={setSelectedProvider}
         prompt={prompt}
         setPrompt={setPrompt}
         designCount={designCount}
@@ -155,6 +211,7 @@ function App() {
         selectedProducts={selectedProducts}
         toggleProduct={toggleProduct}
         selectedTemplates={selectedTemplates}
+        availableTemplates={catalog.templates}
         toggleTemplate={toggleTemplate}
         destinations={destinations}
         setDestinations={setDestinations}
@@ -170,9 +227,10 @@ function App() {
   )
 }
 
-function Dashboard({ onCreate, launched, onViewRun }: { onCreate: () => void; launched: boolean; onViewRun: () => void }) {
+function Dashboard({ catalog, onCreate, launched, launchError, onViewRun }: { catalog: DashboardCatalog; onCreate: () => void; launched: boolean; launchError?: string; onViewRun: () => void }) {
   return <div className="page-wrap">
     {launched && <div className="launch-toast"><span className="pulse-dot" /><strong>Workflow launched.</strong><span>Jobs are queued and will appear in run history.</span></div>}
+    {launchError && <div className="launch-toast error-toast"><strong>Could not queue workflow.</strong><span>{launchError}</span></div>}
     <section className="page-heading dashboard-heading">
       <div><div className="eyebrow"><span className="eyebrow-line" /> Tuesday, August 11, 2026</div><h1>Good morning, Aadil<span className="heading-period">.</span></h1><p>Turn an idea into a ready-to-publish product line.</p></div>
       <button className="primary-button" onClick={onCreate}><span>＋</span> New workflow</button>
@@ -184,18 +242,18 @@ function Dashboard({ onCreate, launched, onViewRun }: { onCreate: () => void; la
     </section>
 
     <section className="metric-grid">
-      <MetricCard label="Active workflows" value="03" note="+2 this month" trend="up" icon="⌁" />
-      <MetricCard label="Assets processed" value="1,204" note="+18.4% vs. last month" trend="up" icon="◉" />
-      <MetricCard label="Ready to publish" value="186" note="Across 3 destinations" trend="neutral" icon="↗" />
-      <MetricCard label="Time saved" value="42h" note="This month" trend="neutral" icon="◷" />
+      <MetricCard label="Active workflows" value={String(catalog.stats.workflows).padStart(2, '0')} note="Saved in this workspace" trend="neutral" icon="⌁" />
+      <MetricCard label="Assets processed" value={catalog.stats.assets.toLocaleString()} note="Persisted source and outputs" trend="neutral" icon="◉" />
+      <MetricCard label="Ready to publish" value={catalog.stats.readyListings.toLocaleString()} note="Drafts and exports" trend="neutral" icon="↗" />
+      <MetricCard label="Time saved" value="—" note="Calculated from completed runs" trend="neutral" icon="◷" />
     </section>
 
     <div className="content-grid">
-      <section className="panel recent-panel"><div className="panel-heading"><div><span className="section-kicker">Production runs</span><h3>Recent workflows</h3></div><button className="text-button" onClick={onCreate}>View all <span>→</span></button></div><div className="run-list">{recentRuns.map((run) => <RunRow key={run.id} run={run} />)}</div></section>
+      <section className="panel recent-panel"><div className="panel-heading"><div><span className="section-kicker">Production runs</span><h3>Recent workflows</h3></div><button className="text-button" onClick={onCreate}>View all <span>→</span></button></div><div className="run-list">{catalog.runs.slice(0, 4).map((run) => <RunRow key={run.id} run={run} />)}</div></section>
       <section className="panel pipeline-panel"><div className="panel-heading"><div><span className="section-kicker">Your system</span><h3>Pipeline health</h3></div><span className="healthy-pill"><i /> All systems healthy</span></div><div className="pipeline-stack"><PipelineRow label="Design generation" provider="OpenRouter · Nano Banana" status="Connected" progress="100%" tone="violet" /><PipelineRow label="Asset processing" provider="Sharp · Local" status="Connected" progress="100%" tone="mint" /><PipelineRow label="Mockup templates" provider="7 templates ready" status="Ready" progress="100%" tone="orange" /><PipelineRow label="Publishing" provider="Etsy · Google Drive" status="Connected" progress="100%" tone="blue" /></div><button className="outline-button full-button">Manage connections <span>→</span></button></section>
     </div>
 
-    <section className="lower-section"><div className="lower-heading"><div><span className="section-kicker">Reusable building blocks</span><h3>Template library</h3></div><button className="text-button">Browse templates <span>→</span></button></div><div className="template-strip">{templateCatalog.slice(0, 4).map((template, index) => <TemplateCard key={template.id} template={template} index={index} />)}<div className="add-template-card" onClick={onCreate}><span>＋</span><strong>Add a template</strong><small>Make your next run more consistent</small></div></div></section>
+    <section className="lower-section"><div className="lower-heading"><div><span className="section-kicker">Reusable building blocks</span><h3>Template library</h3></div><button className="text-button">Browse templates <span>→</span></button></div><div className="template-strip">{catalog.templates.slice(0, 4).map((template, index) => <TemplateCard key={template.id} template={template} index={index} />)}<div className="add-template-card" onClick={onCreate}><span>＋</span><strong>Add a template</strong><small>Make your next run more consistent</small></div></div></section>
   </div>
 }
 
@@ -203,25 +261,25 @@ function MetricCard({ label, value, note, trend, icon }: { label: string; value:
   return <div className="metric-card"><div className="metric-top"><span>{label}</span><b>{icon}</b></div><div className="metric-value">{value}</div><div className={`metric-note ${trend === 'up' ? 'positive' : ''}`}>{trend === 'up' && <span>↗</span>} {note}</div></div>
 }
 
-function RunRow({ run }: { run: typeof recentRuns[number] }) {
-  return <div className="run-row"><div className="run-symbol" style={{ background: run.accent }}>{run.name.slice(0, 1)}</div><div className="run-name"><strong>{run.name}</strong><small>{run.detail}</small></div><div className="run-progress"><div className="progress-label"><span>{run.status === 'Running' ? `${run.progress}% complete` : run.status}</span><small>{run.date}</small></div><div className="progress-track"><span style={{ width: `${run.progress}%`, background: run.accent }} /></div></div><button className="row-action">•••</button></div>
+function RunRow({ run }: { run: { id: string; name: string; detail: string; status: string; progress: number; date: string; accent?: string } }) {
+  return <div className="run-row"><div className="run-symbol" style={{ background: run.accent ?? '#6d5ce7' }}>{run.name.slice(0, 1)}</div><div className="run-name"><strong>{run.name}</strong><small>{run.detail}</small></div><div className="run-progress"><div className="progress-label"><span>{run.status === 'running' ? `${run.progress}% complete` : run.status}</span><small>{run.date}</small></div><div className="progress-track"><span style={{ width: `${run.progress}%`, background: run.accent ?? '#6d5ce7' }} /></div></div><button className="row-action">•••</button></div>
 }
 
 function PipelineRow({ label, provider, status, progress, tone }: { label: string; provider: string; status: string; progress: string; tone: string }) {
   return <div className="pipeline-row"><span className={`pipeline-icon ${tone}`}>✦</span><div><strong>{label}</strong><small>{provider}</small></div><div className="pipeline-status"><span>{status}</span><i /></div><b>{progress}</b></div>
 }
 
-function TemplateCard({ template, index }: { template: typeof templateCatalog[number]; index: number }) {
+function TemplateCard({ template, index }: { template: DashboardCatalog['templates'][number]; index: number }) {
   const colors = ['peach', 'lavender', 'mint', 'sky']
   return <div className="template-card"><div className={`template-art ${colors[index]}`}><span>{template.productType === 'tshirt' ? '✦' : template.productType === 'hoodie' ? '◒' : '▤'}</span><small>{template.kind === 'generative' ? 'AI SCENE' : 'STUDIO'}</small></div><div className="template-info"><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.kind === 'generative' ? 'Generative' : 'Deterministic'}</small></div><button className="mini-more">•••</button></div>
 }
 
-function Workflows({ onCreate }: { onCreate: () => void }) {
-  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / workflows</div><h1>Workflows<span className="heading-period">.</span></h1><p>Reusable recipes for consistent product production.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> New workflow</button></section><div className="workflow-feature"><div className="workflow-feature-copy"><span className="hero-kicker">Recommended starting point</span><h2>AI designs →<br /><em>marketplace ready.</em></h2><p>A guided production line with approval checkpoints, reusable mockups and destination-aware exports.</p><button className="dark-button" onClick={onCreate}>Use this workflow <span>→</span></button></div><div className="workflow-nodes">{['Create designs', 'Review selection', 'Fan out products', 'Render templates', 'Publish'].map((node, index) => <div className="workflow-node" key={node}><span>{String(index + 1).padStart(2, '0')}</span><strong>{node}</strong>{index < 4 && <i>↓</i>}</div>)}</div></div><div className="section-heading-row"><h3>Saved workflows <span>3</span></h3><button className="outline-button">Sort by recent⌄</button></div><section className="workflow-table">{recentRuns.map((run) => <div className="workflow-table-row" key={run.id}><div className="run-symbol" style={{ background: run.accent }}>{run.name.slice(0, 1)}</div><div><strong>{run.name}</strong><small>Version 04 · Last run {run.date.toLowerCase()}</small></div><span className="table-detail">{run.detail}</span><span className={`status-badge ${run.status.toLowerCase()}`}>{run.status}</span><button className="row-action">•••</button></div>)}</section></div>
+function Workflows({ catalog, onCreate }: { catalog: DashboardCatalog; onCreate: () => void }) {
+  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / workflows</div><h1>Workflows<span className="heading-period">.</span></h1><p>Reusable recipes for consistent product production.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> New workflow</button></section><div className="workflow-feature"><div className="workflow-feature-copy"><span className="hero-kicker">Recommended starting point</span><h2>AI designs →<br /><em>marketplace ready.</em></h2><p>A guided production line with approval checkpoints, reusable mockups and destination-aware exports.</p><button className="dark-button" onClick={onCreate}>Use this workflow <span>→</span></button></div><div className="workflow-nodes">{['Create designs', 'Review selection', 'Fan out products', 'Render templates', 'Publish'].map((node, index) => <div className="workflow-node" key={node}><span>{String(index + 1).padStart(2, '0')}</span><strong>{node}</strong>{index < 4 && <i>↓</i>}</div>)}</div></div><div className="section-heading-row"><h3>Saved workflows <span>{catalog.stats.workflows}</span></h3><button className="outline-button">Sort by recent⌄</button></div><section className="workflow-table">{catalog.runs.map((run) => <div className="workflow-table-row" key={run.id}><div className="run-symbol" style={{ background: run.accent ?? '#6d5ce7' }}>{run.name.slice(0, 1)}</div><div><strong>{run.name}</strong><small>Last run {new Date(run.date).toLocaleString()}</small></div><span className="table-detail">{run.detail}</span><span className={`status-badge ${run.status.toLowerCase()}`}>{run.status}</span><button className="row-action">•••</button></div>)}</section></div>
 }
 
-function Templates({ onCreate }: { onCreate: () => void }) {
-  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / template library</div><h1>Templates<span className="heading-period">.</span></h1><p>Pre-tested scenes keep every generation intentional.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> New template</button></section><div className="template-library-grid">{templateCatalog.map((template, index) => <div className="library-card" key={template.id}><div className={`library-art ${['peach', 'lavender', 'mint', 'sky', 'yellow'][index % 5]}`}><span>{template.productType === 'tshirt' ? '✦' : template.productType === 'hoodie' ? '◒' : template.productType === 'wall-art' ? '▤' : '▣'}</span><div>{template.kind === 'generative' ? 'AI TEMPLATE' : 'DETERMINISTIC'}</div></div><div className="library-card-body"><div><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.quantity} output{template.quantity > 1 ? 's' : ''}</small></div><button className="mini-more">•••</button></div></div>)}<div className="empty-library-card" onClick={onCreate}><span>＋</span><strong>Create your own</strong><small>Save a prompt, reference and provider together.</small></div></div></div>
+function Templates({ catalog, onCreate }: { catalog: DashboardCatalog; onCreate: () => void }) {
+  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / template library</div><h1>Templates<span className="heading-period">.</span></h1><p>Pre-tested scenes keep every generation intentional.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> New template</button></section><div className="template-library-grid">{catalog.templates.map((template, index) => <div className="library-card" key={template.id}><div className={`library-art ${['peach', 'lavender', 'mint', 'sky', 'yellow'][index % 5]}`}><span>{template.productType === 'tshirt' ? '✦' : template.productType === 'hoodie' ? '◒' : template.productType === 'wall-art' ? '▤' : '▣'}</span><div>{template.kind === 'generative' ? 'AI TEMPLATE' : 'DETERMINISTIC'}</div></div><div className="library-card-body"><div><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.quantity} output{template.quantity > 1 ? 's' : ''}</small></div><button className="mini-more">•••</button></div></div>)}<div className="empty-library-card" onClick={onCreate}><span>＋</span><strong>Create your own</strong><small>Save a prompt, reference and provider together.</small></div></div></div>
 }
 
 function Connections() {
@@ -229,12 +287,22 @@ function Connections() {
   return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / connections</div><h1>Connections<span className="heading-period">.</span></h1><p>Providers are configured here, never inside your workflow logic.</p></div><button className="outline-button">＋ Add provider</button></section><div className="connection-grid">{connections.map((connection) => <div className="connection-card" key={connection.name}><div className={`connection-mark ${connection.color}`}>{connection.mark}</div><div className="connection-copy"><strong>{connection.name}</strong><small>{connection.detail}</small></div><span className={`connection-status ${connection.status === 'Connected' ? 'connected' : 'not-connected'}`}><i /> {connection.status}</span><button className="outline-button small-button">{connection.status === 'Connected' ? 'Manage' : 'Connect'}</button></div>)}</div><div className="principle-card"><div className="principle-mark">⌘</div><div><span className="section-kicker">Interface-first architecture</span><h3>Swap providers without rebuilding your workflows.</h3><p>OpenRouter today, local ComfyUI tomorrow. Your workflow only knows what a capability can do — not who does it.</p></div><div className="code-pills"><span>ImageGenerationProvider</span><span>StorageProvider</span><span>MarketplaceAdapter</span></div></div></div>
 }
 
-function RunMonitor({ onDashboard }: { onDashboard: () => void }) {
-  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Run 04 / funny cat collection</div><h1>Production is moving<span className="heading-period">.</span></h1><p>Every step runs independently. You can leave this page and come back anytime.</p></div><button className="outline-button" onClick={onDashboard}>← Back to overview</button></section><div className="run-hero"><div><span className="hero-kicker">Run status</span><h2>68% <em>complete</em></h2><p>8 of 12 designs approved · 24 product variants · 72 mockup outputs planned</p></div><div className="run-hero-progress"><div className="progress-label"><span>Overall progress</span><strong>68%</strong></div><div className="run-progress-large"><span /></div><small>Started today at 10:42 AM · estimated 14 minutes remaining</small></div></div><div className="run-layout"><section className="panel job-panel"><div className="panel-heading"><div><span className="section-kicker">Background jobs</span><h3>Pipeline progress</h3></div><span className="healthy-pill"><i /> 28 completed</span></div><div className="job-list">{[['Design generation','12 / 12','complete'],['Design review checkpoint','8 / 12','complete'],['Product fan-out','24 / 24','complete'],['Mockup rendering','49 / 72','running'],['Listing metadata','0 / 24','queued'],['Marketplace publish','Waiting for review','queued']].map(([label, detail, state], index) => <div className="job-row" key={label}><span className={`job-state ${state}`}>{state === 'complete' ? '✓' : state === 'running' ? '⋯' : String(index + 1).padStart(2, '0')}</span><div><strong>{label}</strong><small>{detail}</small></div><span className={`job-label ${state}`}>{state === 'complete' ? 'Complete' : state === 'running' ? 'Processing' : 'Queued'}</span>{state === 'running' && <button className="text-button">Retry</button>}</div>)}</div></section><section className="panel listings-panel"><div className="panel-heading"><div><span className="section-kicker">Preview</span><h3>Listing drafts</h3></div><button className="text-button">Open all →</button></div>{listingItems.map((listing) => <div className="listing-row" key={listing.title}><div className="listing-art" style={{ background: listing.background, color: '#3c3044' }}>{listing.icon}</div><div><strong>{listing.title}</strong><small>{listing.type} · {listing.price}</small></div><span className={`status-badge ${listing.status === 'Draft ready' ? 'ready' : 'draft'}`}>{listing.status}</span></div>)}<button className="dark-button full-button">Review marketplace listings <span>↗</span></button></section></div></div>
+function RunMonitor({ catalog, onDashboard, runId }: { catalog: DashboardCatalog; onDashboard: () => void; runId?: string }) {
+  const [liveRun, setLiveRun] = useState<{ status: string; progressPercent: number } | undefined>()
+  useEffect(() => {
+    if (!runId) return
+    let active = true
+    const poll = async () => { try { const response = await getRun(runId); if (active) setLiveRun(response.run) } catch { /* API may still be starting */ } }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 2500)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [runId])
+  const progress = liveRun?.progressPercent ?? (catalog.runs.find((run) => run.id === runId)?.progress ?? 0)
+  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Run 04 / funny cat collection</div><h1>Production is moving<span className="heading-period">.</span></h1><p>Every step runs independently. You can leave this page and come back anytime. {liveRun && `Status: ${liveRun.status}.`}</p></div><button className="outline-button" onClick={onDashboard}>← Back to overview</button></section><div className="run-hero"><div><span className="hero-kicker">Run status</span><h2>{progress}% <em>complete</em></h2><p>{catalog.runs.find((run) => run.id === runId)?.detail ?? 'Live run details will appear as the worker processes this workflow.'}</p></div><div className="run-hero-progress"><div className="progress-label"><span>Overall progress</span><strong>{progress}%</strong></div><div className="run-progress-large"><span style={{ width: `${progress}%` }} /></div><small>Started today at 10:42 AM · estimated 14 minutes remaining</small></div></div><div className="run-layout"><section className="panel job-panel"><div className="panel-heading"><div><span className="section-kicker">Background jobs</span><h3>Pipeline progress</h3></div><span className="healthy-pill"><i /> 28 completed</span></div><div className="job-list">{(catalog.runs.find((run) => run.id === runId)?.jobs ?? []).map((job, index) => [job.stepName, job.status, job.status]).map(([label, detail, state], index) => <div className="job-row" key={label}><span className={`job-state ${state}`}>{state === 'complete' ? '✓' : state === 'running' ? '⋯' : String(index + 1).padStart(2, '0')}</span><div><strong>{label}</strong><small>{detail}</small></div><span className={`job-label ${state}`}>{state === 'complete' ? 'Complete' : state === 'running' ? 'Processing' : 'Queued'}</span>{state === 'running' && <button className="text-button">Retry</button>}</div>)}</div></section><section className="panel listings-panel"><div className="panel-heading"><div><span className="section-kicker">Preview</span><h3>Listing drafts</h3></div><button className="text-button">Open all →</button></div>{catalog.listings.slice(0, 4).map((listing) => <div className="listing-row" key={listing.id}><div className="listing-art" style={{ background: listing.background, color: listing.accent }}>{listing.icon}</div><div><strong>{listing.title}</strong><small>{listing.type} · {listing.tags.slice(0, 2).join(' · ')}</small></div><span className={`status-badge ${listing.status === 'draft' || listing.status === 'ready' ? 'ready' : 'draft'}`}>{listing.status}</span></div>)}<button className="dark-button full-button">Review marketplace listings <span>↗</span></button></section></div></div>
 }
 
-function Assets() {
-  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / asset library</div><h1>Asset library<span className="heading-period">.</span></h1><p>Your source designs, with provenance attached.</p></div><button className="outline-button">＋ Upload assets</button></section><div className="asset-toolbar"><div className="search-field">⌕ <span>Search assets</span></div><div className="filter-pills"><button className="filter-active">All assets</button><button>Generated</button><button>Uploaded</button><button>Mockups</button></div></div><div className="asset-grid">{designArt.map((design) => <div className="asset-card" key={design.id}><div className="asset-art" style={{ background: design.background, color: design.accent }}><span>{design.icon}</span><small>{design.title}</small></div><div className="asset-card-meta"><strong>{design.title}</strong><small>Generated · OpenRouter · PNG</small><button className="mini-more">•••</button></div></div>)}</div></div>
+function Assets({ catalog }: { catalog: DashboardCatalog }) {
+  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / asset library</div><h1>Asset library<span className="heading-period">.</span></h1><p>Your source designs, with provenance attached.</p></div><button className="outline-button">＋ Upload assets</button></section><div className="asset-toolbar"><div className="search-field">⌕ <span>Search assets</span></div><div className="filter-pills"><button className="filter-active">All assets</button><button>Generated</button><button>Uploaded</button><button>Mockups</button></div></div><div className="asset-grid">{catalog.assets.map((asset) => <div className="asset-card" key={asset.id}><div className="asset-art" style={{ background: asset.background, color: asset.accent }}><img src={asset.url} alt={asset.name} /><small>{asset.name}</small></div><div className="asset-card-meta"><strong>{asset.name}</strong><small>{asset.type} · {asset.contentType}</small><button className="mini-more">•••</button></div></div>)}</div></div>
 }
 
 interface WizardProps {
@@ -242,6 +310,8 @@ interface WizardProps {
   currentStepIndex: number
   source: 'ai' | 'upload'
   setSource: (source: 'ai' | 'upload') => void
+  selectedProvider: string
+  setSelectedProvider: (provider: string) => void
   prompt: string
   setPrompt: (prompt: string) => void
   designCount: number
@@ -250,7 +320,8 @@ interface WizardProps {
   setSelectedDesigns: (ids: string[]) => void
   selectedProducts: ProductType[]
   toggleProduct: (id: ProductType) => void
-  selectedTemplates: typeof templateCatalog
+  selectedTemplates: DashboardCatalog['templates']
+  availableTemplates: DashboardCatalog['templates']
   toggleTemplate: (id: string) => void
   destinations: string[]
   setDestinations: (destinations: string[]) => void
@@ -266,19 +337,19 @@ interface WizardProps {
 }
 
 function WizardModal(props: WizardProps) {
-  const { step, currentStepIndex, source, setSource, prompt, setPrompt, designCount, setDesignCount, selectedDesigns, setSelectedDesigns, uploadedFiles, onFiles, selectedProducts, toggleProduct, selectedTemplates, toggleTemplate, destinations, setDestinations, products, mockups, onClose, onNext, onBack, onLaunch } = props
-  const canContinue = step === 'review' ? selectedDesigns.length > 0 : step === 'products' ? selectedProducts.length > 0 && selectedTemplates.length > 0 : step === 'destinations' ? destinations.length > 0 : true
+  const { step, currentStepIndex, source, setSource, selectedProvider, setSelectedProvider, prompt, setPrompt, designCount, setDesignCount, selectedDesigns, setSelectedDesigns, uploadedFiles, onFiles, selectedProducts, toggleProduct, selectedTemplates, availableTemplates, toggleTemplate, destinations, setDestinations, products, mockups, onClose, onNext, onBack, onLaunch } = props
+  const canContinue = step === 'review' ? (source === 'ai' ? designCount > 0 : selectedDesigns.length > 0) : step === 'products' ? selectedProducts.length > 0 && selectedTemplates.length > 0 : step === 'destinations' ? destinations.length > 0 : true
   const isSummary = step === 'summary'
-  return <div className="modal-backdrop"><div className="wizard-shell"><aside className="wizard-sidebar"><button className="close-wizard" onClick={onClose}>× <span>Close</span></button><div className="wizard-brand"><div className="brand-mark"><span>✦</span></div><div><strong>New workflow</strong><small>Build your production line</small></div></div><div className="step-list">{wizardSteps.map((item, index) => <button key={item.id} className={`step-item ${step === item.id ? 'current' : ''} ${index < currentStepIndex ? 'done' : ''}`} onClick={() => index <= currentStepIndex && props.setStep(item.id)}><span className="step-number">{index < currentStepIndex ? '✓' : item.number}</span><span>{item.label}</span></button>)}</div><div className="wizard-aside-note"><span>✧</span><strong>Keep it flexible</strong><p>Every provider, template and destination can be swapped later.</p></div></aside><section className="wizard-main"><div className="wizard-topline"><span>New production workflow</span><span>Step {String(currentStepIndex + 1).padStart(2, '0')} of {wizardSteps.length}</span></div><div className="wizard-progress"><span style={{ width: `${((currentStepIndex + 1) / wizardSteps.length) * 100}%` }} /></div><div className="wizard-content">{step === 'start' && <StartStep />}{step === 'source' && <SourceStep source={source} setSource={setSource} prompt={prompt} setPrompt={setPrompt} designCount={designCount} setDesignCount={setDesignCount} onFiles={onFiles} />}{step === 'review' && <ReviewStep selectedDesigns={selectedDesigns} setSelectedDesigns={setSelectedDesigns} source={source} uploadedFiles={uploadedFiles} />}{step === 'products' && <ProductsStep selectedProducts={selectedProducts} toggleProduct={toggleProduct} selectedTemplates={selectedTemplates} toggleTemplate={toggleTemplate} products={products} mockups={mockups} />}{step === 'destinations' && <DestinationsStep destinations={destinations} setDestinations={setDestinations} />}{step === 'summary' && <SummaryStep source={source} prompt={prompt} designCount={source === 'ai' ? designCount : selectedDesigns.length} products={products} mockups={mockups} selectedProducts={selectedProducts} destinations={destinations} />}</div><div className="wizard-footer"><button className="back-button" onClick={currentStepIndex === 0 ? onClose : onBack}>{currentStepIndex === 0 ? 'Cancel' : '← Back'}</button>{isSummary ? <button className="primary-button launch-button" onClick={onLaunch}>Launch workflow <span>↗</span></button> : <button className="primary-button" disabled={!canContinue} onClick={onNext}>Continue <span>→</span></button>}</div></section></div></div>
+  return <div className="modal-backdrop"><div className="wizard-shell"><aside className="wizard-sidebar"><button className="close-wizard" onClick={onClose}>× <span>Close</span></button><div className="wizard-brand"><div className="brand-mark"><span>✦</span></div><div><strong>New workflow</strong><small>Build your production line</small></div></div><div className="step-list">{wizardSteps.map((item, index) => <button key={item.id} className={`step-item ${step === item.id ? 'current' : ''} ${index < currentStepIndex ? 'done' : ''}`} onClick={() => index <= currentStepIndex && props.setStep(item.id)}><span className="step-number">{index < currentStepIndex ? '✓' : item.number}</span><span>{item.label}</span></button>)}</div><div className="wizard-aside-note"><span>✧</span><strong>Keep it flexible</strong><p>Every provider, template and destination can be swapped later.</p></div></aside><section className="wizard-main"><div className="wizard-topline"><span>New production workflow</span><span>Step {String(currentStepIndex + 1).padStart(2, '0')} of {wizardSteps.length}</span></div><div className="wizard-progress"><span style={{ width: `${((currentStepIndex + 1) / wizardSteps.length) * 100}%` }} /></div><div className="wizard-content">{step === 'start' && <StartStep />}{step === 'source' && <SourceStep source={source} setSource={setSource} selectedProvider={selectedProvider} setSelectedProvider={setSelectedProvider} prompt={prompt} setPrompt={setPrompt} designCount={designCount} setDesignCount={setDesignCount} onFiles={onFiles} />}{step === 'review' && <ReviewStep selectedDesigns={selectedDesigns} setSelectedDesigns={setSelectedDesigns} source={source} uploadedFiles={uploadedFiles} />}{step === 'products' && <ProductsStep selectedProducts={selectedProducts} toggleProduct={toggleProduct} availableTemplates={availableTemplates} selectedTemplates={selectedTemplates} toggleTemplate={toggleTemplate} products={products} mockups={mockups} />}{step === 'destinations' && <DestinationsStep destinations={destinations} setDestinations={setDestinations} />}{step === 'summary' && <SummaryStep source={source} prompt={prompt} designCount={source === 'ai' ? designCount : selectedDesigns.length} products={products} mockups={mockups} selectedProducts={selectedProducts} destinations={destinations} />}</div><div className="wizard-footer"><button className="back-button" onClick={currentStepIndex === 0 ? onClose : onBack}>{currentStepIndex === 0 ? 'Cancel' : '← Back'}</button>{isSummary ? <button className="primary-button launch-button" onClick={onLaunch}>Launch workflow <span>↗</span></button> : <button className="primary-button" disabled={!canContinue} onClick={onNext}>Continue <span>→</span></button>}</div></section></div></div>
 }
 
 function StartStep() { return <div className="wizard-intro"><span className="big-step-mark">01</span><span className="section-kicker">Start with intention</span><h2>What are we<br /><em>making today?</em></h2><p>Build a repeatable production line for your next collection. You can reuse this workflow as many times as you like.</p><div className="start-options"><div className="start-option selected"><div className="option-icon">✦</div><div><strong>Start from scratch</strong><small>Design your production line step by step.</small></div><span className="radio-dot" /></div><div className="start-option"><div className="option-icon muted">↺</div><div><strong>Use an existing workflow</strong><small>Start from one of your saved recipes.</small></div><span className="radio-dot empty" /></div></div></div> }
 
-function SourceStep({ source, setSource, prompt, setPrompt, designCount, setDesignCount, onFiles }: Pick<WizardProps, 'source' | 'setSource' | 'prompt' | 'setPrompt' | 'designCount' | 'setDesignCount' | 'onFiles'>) { return <div className="wizard-form-step"><span className="big-step-mark">02</span><span className="section-kicker">Design source</span><h2>Bring the idea to<br /><em>life.</em></h2><p>Start with a theme and let your configured provider create a consistent collection — or bring your own artwork.</p><div className="source-toggle"><button className={source === 'ai' ? 'selected' : ''} onClick={() => setSource('ai')}><span>✦</span> Generate with AI</button><button className={source === 'upload' ? 'selected' : ''} onClick={() => setSource('upload')}><span>↥</span> Upload existing</button></div>{source === 'ai' ? <div className="form-stack"><label>Collection theme<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label><div className="form-columns"><label>Number of designs<div className="number-control"><button onClick={() => setDesignCount(Math.max(1, designCount - 1))}>−</button><strong>{designCount}</strong><button onClick={() => setDesignCount(Math.min(100, designCount + 1))}>＋</button></div></label><label>Image provider<select defaultValue="openrouter"><option>OpenRouter</option><option>Fal.ai</option><option>Local ComfyUI</option></select></label></div><div className="info-note"><span>✧</span><span>Using <strong>OpenRouter · Nano Banana</strong>. The provider can be changed later without changing your workflow.</span></div></div> : <div className="upload-zone"><span>↥</span><strong>Drop your designs here</strong><small>PNG, JPG or WEBP · up to 100 files</small><button className="outline-button" onClick={() => document.getElementById('design-upload')?.click()}>Browse files</button><input id="design-upload" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => onFiles(event.target.files)} /></div>}</div> }
+function SourceStep({ source, setSource, selectedProvider, setSelectedProvider, prompt, setPrompt, designCount, setDesignCount, onFiles }: Pick<WizardProps, 'source' | 'setSource' | 'selectedProvider' | 'setSelectedProvider' | 'prompt' | 'setPrompt' | 'designCount' | 'setDesignCount' | 'onFiles'>) { return <div className="wizard-form-step"><span className="big-step-mark">02</span><span className="section-kicker">Design source</span><h2>Bring the idea to<br /><em>life.</em></h2><p>Start with a theme and let your configured provider create a consistent collection — or bring your own artwork.</p><div className="source-toggle"><button className={source === 'ai' ? 'selected' : ''} onClick={() => setSource('ai')}><span>✦</span> Generate with AI</button><button className={source === 'upload' ? 'selected' : ''} onClick={() => setSource('upload')}><span>↥</span> Upload existing</button></div>{source === 'ai' ? <div className="form-stack"><label>Collection theme<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} /></label><div className="form-columns"><label>Number of designs<div className="number-control"><button onClick={() => setDesignCount(Math.max(1, designCount - 1))}>−</button><strong>{designCount}</strong><button onClick={() => setDesignCount(Math.min(100, designCount + 1))}>＋</button></div></label><label>Image provider<select value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)}><option value="openrouter">OpenRouter</option><option value="fal">Fal.ai</option><option value="mock">Local mock</option></select></label></div><div className="info-note"><span>✧</span><span>Using <strong>OpenRouter · Nano Banana</strong>. The provider can be changed later without changing your workflow.</span></div></div> : <div className="upload-zone"><span>↥</span><strong>Drop your designs here</strong><small>PNG, JPG or WEBP · up to 100 files</small><button className="outline-button" onClick={() => document.getElementById('design-upload')?.click()}>Browse files</button><input id="design-upload" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => onFiles(event.target.files)} /></div>}</div> }
 
-function ReviewStep({ selectedDesigns, setSelectedDesigns, source, uploadedFiles }: Pick<WizardProps, 'selectedDesigns' | 'setSelectedDesigns' | 'source' | 'uploadedFiles'>) { const reviewItems = source === 'upload' && uploadedFiles.length > 0 ? uploadedFiles.map((file, index) => ({ id: file.id, title: file.name, subtitle: `${String(index + 1).padStart(2, '0')} / ${uploadedFiles.length}`, background: `url(${file.url}) center / cover`, accent: '#fff', icon: '' })) : designArt; const allSelected = selectedDesigns.length === reviewItems.length; return <div className="wizard-form-step review-step"><div className="step-heading-row"><div><span className="big-step-mark">03</span><span className="section-kicker">Approval checkpoint</span><h2>Choose your<br /><em>strongest ideas.</em></h2><p>{source === 'ai' ? 'The first pass is ready. Select the designs worth taking into production.' : 'Review the designs you uploaded before creating any mockups.'}</p></div><div className="review-count"><strong>{selectedDesigns.length}</strong><small>selected</small></div></div><div className="review-toolbar"><span>Showing {reviewItems.length} designs</span><button onClick={() => setSelectedDesigns(allSelected ? [] : reviewItems.map((design) => design.id))}>{allSelected ? 'Deselect all' : 'Select all'}</button></div><div className="design-review-grid">{reviewItems.map((design) => { const selected = selectedDesigns.includes(design.id); return <button className={`review-design ${selected ? 'selected' : ''}`} key={design.id} onClick={() => setSelectedDesigns(selected ? selectedDesigns.filter((id) => id !== design.id) : [...selectedDesigns, design.id])}><div className="review-art" style={{ background: design.background, color: design.accent }}><span>{design.icon}</span><small>{design.title}</small></div><div className="review-meta"><span>{design.subtitle}</span><i>{selected ? '✓' : ''}</i></div></button> })}</div></div> }
+function ReviewStep({ selectedDesigns, setSelectedDesigns, source, uploadedFiles }: Pick<WizardProps, 'selectedDesigns' | 'setSelectedDesigns' | 'source' | 'uploadedFiles'>) { const reviewItems = uploadedFiles.map((file, index) => ({ id: file.id, title: file.name, subtitle: `${String(index + 1).padStart(2, '0')} / ${uploadedFiles.length}`, background: `url(${file.url}) center / cover`, accent: '#fff', icon: '' })); const allSelected = selectedDesigns.length === reviewItems.length; return <div className="wizard-form-step review-step"><div className="step-heading-row"><div><span className="big-step-mark">03</span><span className="section-kicker">Approval checkpoint</span><h2>Choose your<br /><em>strongest ideas.</em></h2><p>{source === 'ai' ? 'Your selected provider will generate the collection when this workflow runs.' : 'Review the designs you uploaded before creating any mockups.'}</p></div><div className="review-count"><strong>{selectedDesigns.length}</strong><small>selected</small></div></div><div className="review-toolbar"><span>Showing {reviewItems.length} designs</span><button onClick={() => setSelectedDesigns(allSelected ? [] : reviewItems.map((design) => design.id))}>{allSelected ? 'Deselect all' : 'Select all'}</button></div><div className="design-review-grid">{reviewItems.map((design) => { const selected = selectedDesigns.includes(design.id); return <button className={`review-design ${selected ? 'selected' : ''}`} key={design.id} onClick={() => setSelectedDesigns(selected ? selectedDesigns.filter((id) => id !== design.id) : [...selectedDesigns, design.id])}><div className="review-art" style={{ background: design.background, color: design.accent }}><span>{design.icon}</span><small>{design.title}</small></div><div className="review-meta"><span>{design.subtitle}</span><i>{selected ? '✓' : ''}</i></div></button> })}</div></div> }
 
-function ProductsStep({ selectedProducts, toggleProduct, selectedTemplates, toggleTemplate, products, mockups }: Pick<WizardProps, 'selectedProducts' | 'toggleProduct' | 'selectedTemplates' | 'toggleTemplate' | 'products' | 'mockups'>) { return <div className="wizard-form-step products-step"><span className="big-step-mark">04</span><span className="section-kicker">Fan out the collection</span><h2>Make products,<br /><em>not just images.</em></h2><p>One approved design can become many product variants. Choose the products, then assign intentional mockup templates.</p><div className="product-selector">{productOptions.map((product) => <button className={`product-choice ${selectedProducts.includes(product.id) ? 'selected' : ''}`} key={product.id} onClick={() => toggleProduct(product.id)}><span className="product-emoji" style={{ background: product.color }}>{product.emoji}</span><span><strong>{product.label}</strong><small>{product.description}</small></span><i>{selectedProducts.includes(product.id) ? '✓' : '+'}</i></button>)}</div><div className="selection-summary"><div><strong>{products}</strong><small>product variants</small></div><div className="summary-divider" /><div><strong>{mockups}</strong><small>mockup outputs</small></div><span>per {selectedProducts.length || 0} product types</span></div><div className="template-config"><div className="subheading-row"><div><strong>Mockup templates</strong><small>AI scenes are always template-driven.</small></div><button className="text-button">Manage library →</button></div><div className="template-config-list">{templateCatalog.filter((template) => selectedProducts.includes(template.productType)).map((template) => <button className={`template-config-row ${selectedTemplates.some((item) => item.id === template.id) ? 'selected' : ''}`} key={template.id} onClick={() => toggleTemplate(template.id)}><span className={`template-thumb ${template.kind === 'generative' ? 'ai' : 'deterministic'}`}>{template.kind === 'generative' ? '✦' : '▧'}</span><span><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.kind === 'generative' ? 'AI template' : 'Deterministic'}</small></span><b>{selectedTemplates.find((item) => item.id === template.id)?.quantity ?? 0}</b><i>{selectedTemplates.some((item) => item.id === template.id) ? '✓' : '+'}</i></button>)}</div></div></div> }
+function ProductsStep({ selectedProducts, toggleProduct, availableTemplates, selectedTemplates, toggleTemplate, products, mockups }: Pick<WizardProps, 'selectedProducts' | 'toggleProduct' | 'availableTemplates' | 'selectedTemplates' | 'toggleTemplate' | 'products' | 'mockups'>) { return <div className="wizard-form-step products-step"><span className="big-step-mark">04</span><span className="section-kicker">Fan out the collection</span><h2>Make products,<br /><em>not just images.</em></h2><p>One approved design can become many product variants. Choose the products, then assign intentional mockup templates.</p><div className="product-selector">{productOptions.map((product) => <button className={`product-choice ${selectedProducts.includes(product.id) ? 'selected' : ''}`} key={product.id} onClick={() => toggleProduct(product.id)}><span className="product-emoji" style={{ background: product.color }}>{product.emoji}</span><span><strong>{product.label}</strong><small>{product.description}</small></span><i>{selectedProducts.includes(product.id) ? '✓' : '+'}</i></button>)}</div><div className="selection-summary"><div><strong>{products}</strong><small>product variants</small></div><div className="summary-divider" /><div><strong>{mockups}</strong><small>mockup outputs</small></div><span>per {selectedProducts.length || 0} product types</span></div><div className="template-config"><div className="subheading-row"><div><strong>Mockup templates</strong><small>AI scenes are always template-driven.</small></div><button className="text-button">Manage library →</button></div><div className="template-config-list">{availableTemplates.filter((template) => selectedProducts.includes(template.productType)).map((template) => <button className={`template-config-row ${selectedTemplates.some((item) => item.id === template.id) ? 'selected' : ''}`} key={template.id} onClick={() => toggleTemplate(template.id)}><span className={`template-thumb ${template.kind === 'generative' ? 'ai' : 'deterministic'}`}>{template.kind === 'generative' ? '✦' : '▧'}</span><span><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.kind === 'generative' ? 'AI template' : 'Deterministic'}</small></span><b>{selectedTemplates.find((item) => item.id === template.id)?.quantity ?? 0}</b><i>{selectedTemplates.some((item) => item.id === template.id) ? '✓' : '+'}</i></button>)}</div></div></div> }
 
 function DestinationsStep({ destinations, setDestinations }: Pick<WizardProps, 'destinations' | 'setDestinations'>) { const toggle = (id: string) => setDestinations(destinations.includes(id) ? destinations.filter((item) => item !== id) : [...destinations, id]); return <div className="wizard-form-step"><span className="big-step-mark">05</span><span className="section-kicker">Where it goes</span><h2>Choose your<br /><em>destinations.</em></h2><p>Publish when you're ready, or keep a structured export as your source of truth. You can select more than one.</p><div className="destination-list"><DestinationRow id="etsy" selected={destinations.includes('etsy')} onToggle={toggle} icon="e" title="Etsy" detail="Create drafts or publish listings" badge="Connected" tone="orange" /><DestinationRow id="tpublic" selected={destinations.includes('tpublic')} onToggle={toggle} icon="T" title="TeePublic" detail="Product destination adapter" badge="Coming soon" tone="dark" /><DestinationRow id="drive" selected={destinations.includes('drive')} onToggle={toggle} icon="△" title="Google Drive" detail="Sync a copy to your connected folder" badge="Connected" tone="blue" /><DestinationRow id="download" selected={destinations.includes('download')} onToggle={toggle} icon="↓" title="Structured download" detail="Always available as a ZIP export" badge="Included" tone="violet" /></div><div className="storage-note"><span>◉</span><span>Assets are permanently stored in your connected <strong>workspace storage</strong>. Self-hosted deployments can use the local filesystem.</span></div></div> }
 

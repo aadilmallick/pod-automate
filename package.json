@@ -5,19 +5,45 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "tsx src/server/index.ts",
+    "dev:worker": "tsx src/server/worker.ts",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start:api": "npm run db:bootstrap && tsx src/server/index.ts",
+    "start:worker": "npm run db:bootstrap && tsx src/server/worker.ts",
+    "db:bootstrap": "tsx src/server/db/bootstrap.ts",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.637.0",
+    "@hono/node-server": "^1.12.1",
+    "archiver": "^7.0.1",
+    "bullmq": "^5.12.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.33.0",
+    "hono": "^4.5.5",
+    "ioredis": "^5.4.1",
+    "mime-types": "^2.1.35",
+    "pg": "^8.12.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "sharp": "^0.33.5",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@types/node": "^22.5.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "@types/archiver": "^6.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/mime-types": "^2.1.4",
+    "@types/pg": "^8.11.6",
+    "drizzle-kit": "^0.24.2",
+    "tsx": "^4.17.0",
     "typescript": "^5.5.4",
+    "vitest": "^2.0.5",
     "vite": "^5.4.2"
   }
 }
