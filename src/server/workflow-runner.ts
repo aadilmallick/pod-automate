@@ -1,37 +1,66 @@
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { Worker, type Job } from 'bullmq'
 import { db } from './db/client'
 import { assets, jobs, marketplaceListings, mockups, productVariants, runs } from './db/schema'
-import { imageProvider } from './ai'
+import { generateImages, imageProvider } from './ai'
 import { storage } from './storage'
 import { redis } from './queue'
 import { config } from './config'
 
-interface RunPayload { runId: string; prompt: string; count: number; products: string[]; destinations: string[]; provider?: string; templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }> }
+interface RunPayload { runId: string; workspaceId: string; prompt: string; count: number; products: string[]; destinations: string[]; provider?: string; assetIds?: string[]; templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }> }
 
-async function updateRun(runId: string, progressPercent: number, status: string) { await db.update(runs).set({ progressPercent, status, updatedAt: new Date() }).where(eq(runs.id, runId)) }
+async function updateRun(runId: string, progressPercent: number, status: string, errorLog?: string) { await db.update(runs).set({ progressPercent, status, ...(errorLog ? { errorLog } : {}), updatedAt: new Date() }).where(eq(runs.id, runId)) }
 
-async function bufferFromUrl(url: string) { return url.startsWith('data:') ? Buffer.from(url.split(',')[1], 'base64') : Buffer.from(await (await fetch(url)).arrayBuffer()) }
+async function updateJob(runId: string, stepName: string, status: string, errorLog?: string) { await db.update(jobs).set({ status, ...(errorLog ? { errorLog } : {}), updatedAt: new Date() }).where(and(eq(jobs.runId, runId), eq(jobs.stepName, stepName))) }
+
+async function bufferFromUrl(url: string) {
+  if (!url.startsWith('data:')) {
+    const response = await fetch(url)
+    if (!response.ok) throw new Error(`Generated image download failed (${response.status})`)
+    return Buffer.from(await response.arrayBuffer())
+  }
+  const [header, payload = ''] = url.split(',', 2)
+  return header.includes(';base64') ? Buffer.from(payload, 'base64') : Buffer.from(decodeURIComponent(payload))
+}
+
+function imageFormat(buffer: Buffer) {
+  if (buffer.subarray(0, 100).toString().includes('<svg')) return { extension: 'svg', contentType: 'image/svg+xml' }
+  if (buffer.subarray(0, 8).toString('hex') === '89504e470d0a1a0a') return { extension: 'png', contentType: 'image/png' }
+  if (buffer.subarray(0, 3).toString('hex') === 'ffd8ff') return { extension: 'jpg', contentType: 'image/jpeg' }
+  if (buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WEBP') return { extension: 'webp', contentType: 'image/webp' }
+  return { extension: 'bin', contentType: 'application/octet-stream' }
+}
 
 async function processRun(job: Job<RunPayload>) {
-  const { runId, prompt, count, products, destinations, provider, templates = [] } = job.data
+  const { runId, workspaceId, prompt, count, products, destinations, provider, assetIds = [], templates = [] } = job.data
+  const effectiveProvider = provider ?? config.AI_PROVIDER
+  const model = effectiveProvider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL
   await updateRun(runId, 5, 'running')
-  const generation = await imageProvider(provider).generateImages({ prompt, width: 1024, height: 1024, count, model: provider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL })
+  await updateJob(runId, 'workflow:start', 'running')
   const designIds: string[] = []
-  for (const [index, url] of generation.urls.entries()) {
+  if (assetIds.length) {
+    const selectedAssets = await db.select().from(assets).where(and(eq(assets.workspaceId, workspaceId), inArray(assets.id, assetIds)))
+    if (selectedAssets.length !== assetIds.length) throw new Error('Selected assets could not be found in this workspace')
+    await db.update(assets).set({ runId, updatedAt: new Date() }).where(inArray(assets.id, selectedAssets.map((asset) => asset.id)))
+    designIds.push(...selectedAssets.map((asset) => asset.id))
+    await updateJob(runId, 'workflow:start', 'completed')
+  } else {
+    const generation = await generateImages(imageProvider(effectiveProvider), { prompt, width: 1024, height: 1024, count, model })
+    for (const [index, url] of generation.urls.entries()) {
     const buffer = await bufferFromUrl(url)
-    const isSvg = buffer.subarray(0, 100).toString().includes('<svg')
-    const extension = isSvg ? 'svg' : 'png'
-    const contentType = isSvg ? 'image/svg+xml' : 'image/png'
+    const { extension, contentType } = imageFormat(buffer)
     const storagePath = `runs/${runId}/designs/design-${String(index + 1).padStart(3, '0')}.${extension}`
     await storage.put(storagePath, buffer, contentType)
-    const [asset] = await db.insert(assets).values({ runId, type: 'design', name: `Design ${index + 1}`, storagePath, contentType, metadata: { provider: provider ?? config.AI_PROVIDER, prompt, model: config.OPENROUTER_IMAGE_MODEL } }).returning()
+    const [asset] = await db.insert(assets).values({ runId, workspaceId, type: 'design', name: `Design ${index + 1}`, storagePath, contentType, metadata: { provider: effectiveProvider, prompt, model } }).returning()
     designIds.push(asset.id)
+    }
+    await updateJob(runId, 'workflow:start', 'completed')
   }
   await updateRun(runId, 35, 'running')
   let completed = 0
   for (const designId of designIds) {
     for (const productType of products) {
+      const [stageJob] = await db.insert(jobs).values({ runId, stepName: `mockup:${designId}:${productType}`, status: 'running' }).returning()
       const [variant] = await db.insert(productVariants).values({ runId, designAssetId: designId, productType, status: 'ready' }).returning()
       const productTemplates = templates.filter((template) => template.productType === productType)
       const templatesToRender = productTemplates.length ? productTemplates : [{ id: 'fallback-studio', name: 'Studio front', kind: 'deterministic' as const, productType, quantity: 1 }]
@@ -40,9 +69,9 @@ async function processRun(job: Job<RunPayload>) {
           let mockupBuffer: Buffer
           let mockupContentType = 'image/svg+xml'
           if (template.kind === 'generative') {
-            const generated = await imageProvider(provider).generateImages({ prompt: `${template.name}: place the exact artwork for a ${productType} product into a polished lifestyle mockup. ${prompt}`, width: 1600, height: 1600, count: 1, model: provider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL })
+            const generated = await generateImages(imageProvider(effectiveProvider), { prompt: `${template.name}: place the exact artwork for a ${productType} product into a polished lifestyle mockup. ${prompt}`, width: 1600, height: 1600, count: 1, model })
             mockupBuffer = await bufferFromUrl(generated.urls[0])
-            mockupContentType = mockupBuffer.subarray(0, 100).toString().includes('<svg') ? 'image/svg+xml' : 'image/png'
+            mockupContentType = imageFormat(mockupBuffer).contentType
           } else {
             const background = '#e6f5ee'
             const accent = '#398862'
@@ -58,7 +87,7 @@ async function processRun(job: Job<RunPayload>) {
       for (const destination of destinations) {
         await db.insert(marketplaceListings).values({ productVariantId: variant.id, marketplace: destination, status: destination === 'download' ? 'ready' : 'draft', metadata: { title: `${prompt.slice(0, 65)} · ${productType}`, tags: ['print on demand', productType, 'original design'] } })
       }
-      await db.insert(jobs).values({ runId, stepName: `mockup:${productType}`, status: 'completed' })
+      await db.update(jobs).set({ status: 'completed', updatedAt: new Date() }).where(eq(jobs.id, stageJob.id))
       completed += 1
     }
     await updateRun(runId, Math.min(94, 35 + Math.round((completed / Math.max(1, designIds.length * products.length)) * 55)), 'running')
@@ -69,4 +98,4 @@ async function processRun(job: Job<RunPayload>) {
 
 export const worker = new Worker<RunPayload>('pod-workflows', processRun, { connection: redis, concurrency: 2 })
 worker.on('completed', (job) => console.log(`[worker] completed ${job.id}`))
-worker.on('failed', (job, error) => { console.error(`[worker] failed ${job?.id}`, error); if (job?.data.runId) void updateRun(job.data.runId, 0, 'failed') })
+worker.on('failed', (job, error) => { console.error(`[worker] failed ${job?.id}`, error); if (job?.data.runId && job.attemptsMade >= (job.opts.attempts ?? 1)) void Promise.all([updateRun(job.data.runId, 0, 'failed', error.message), db.update(jobs).set({ status: 'failed', errorLog: error.message, updatedAt: new Date() }).where(and(eq(jobs.runId, job.data.runId), eq(jobs.status, 'running')))]) })

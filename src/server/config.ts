@@ -20,7 +20,7 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_IMAGE_MODEL: z.string().default('google/gemini-2.5-flash-image-preview'),
+  OPENROUTER_IMAGE_MODEL: z.string().default('google/gemini-3.1-flash-image'),
   FAL_API_KEY: z.string().optional(),
   FAL_IMAGE_MODEL: z.string().default('fal-ai/flux/schnell'),
   AI_PROVIDER: z.enum(['openrouter', 'fal', 'mock']).default('openrouter'),

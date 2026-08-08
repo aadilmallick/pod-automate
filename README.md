@@ -42,7 +42,7 @@ Generated assets use the local filesystem by default (`./data/uploads`). Set `ST
 
 ## Providers
 
-`OPENROUTER_API_KEY` and `FAL_API_KEY` are read only by the server/worker. Choose the active provider with `AI_PROVIDER=openrouter` or `AI_PROVIDER=fal`. The wizard also lets you select a provider per run.
+`OPENROUTER_API_KEY` and `FAL_API_KEY` are read only by the server/worker. Choose the active provider with `AI_PROVIDER=openrouter` or `AI_PROVIDER=fal`. The wizard also lets you select a provider per run. The default OpenRouter image model is `google/gemini-3.1-flash-image`; the default Fal model is `fal-ai/flux/schnell`.
 
 The `mock` provider is useful for local smoke tests without inference cost.
 

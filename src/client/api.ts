@@ -5,6 +5,7 @@ export interface RunInput {
   products: string[]
   destinations: string[]
   provider?: string
+  assetIds?: string[]
   templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }>
 }
 
@@ -14,10 +15,13 @@ export interface ApiRun {
   progressPercent: number
   config: RunInput
   createdAt: string
+  errorLog?: string | null
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...options, credentials: 'include', headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) } })
+  const headers = new Headers(options?.headers)
+  if (!(options?.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+  const response = await fetch(path, { ...options, credentials: 'include', headers })
   if (!response.ok) throw new Error((await response.json().catch(() => null) as { error?: string } | null)?.error ?? `Request failed (${response.status})`)
   return response.json() as Promise<T>
 }
@@ -27,7 +31,8 @@ import type { ProductType } from '../core/interfaces/providers'
 
 export interface DashboardCatalog {
   stats: { workflows: number; assets: number; readyListings: number }
-  runs: Array<{ id: string; name: string; detail: string; status: string; progress: number; date: string; jobs: Array<{ id: string; stepName: string; status: string }> }>
+  connections: Array<{ id: string; name: string; configured: boolean; detail: string }>
+  runs: Array<{ id: string; name: string; detail: string; status: string; progress: number; date: string; accent: string; jobs: Array<{ id: string; stepName: string; status: string; errorLog?: string | null }> }>
   assets: Array<{ id: string; name: string; type: string; contentType: string; url: string; background: string; accent: string; icon: string; createdAt: string }>
   templates: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: ProductType; quantity: number; background: string; accent: string; icon: string }>
   listings: Array<{ id: string; title: string; type: string; status: string; tags: string[]; background: string; accent: string; icon: string }>
@@ -36,6 +41,7 @@ export function getAuthStatus() { return request<{ mode: 'development' | 'google
 export function createDevSession() { return request<{ user: SessionUser }>('/api/auth/dev-session', { method: 'POST' }) }
 export function logout() { return request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }) }
 export function getDashboardCatalog() { return request<DashboardCatalog>('/api/dashboard/catalog') }
+export function uploadAsset(file: File) { const body = new FormData(); body.append('file', file); return request<{ id: string; name: string; path: string; url: string }>('/api/assets/upload', { method: 'POST', body, headers: {} }) }
 export function createRun(input: RunInput) { return request<{ run: ApiRun }>('/api/workflows/runs', { method: 'POST', body: JSON.stringify(input) }) }
-export function getRun(id: string) { return request<{ run: ApiRun; assets: Array<{ id: string; name: string; url: string }> }>(`/api/runs/${id}`) }
+export function getRun(id: string) { return request<{ run: ApiRun; assets: Array<{ id: string; name: string; url: string; type: string; contentType: string }>; mockups: Array<{ id: string; url: string; storagePath: string; status: string }>; jobs: Array<{ id: string; stepName: string; status: string; errorLog?: string | null }>; listings: Array<{ id: string; marketplace: string; status: string; metadata: Record<string, unknown> }> }>(`/api/runs/${id}`) }
 export function getRunListings(id: string) { return request<{ listings: Array<Record<string, unknown>> }>(`/api/runs/${id}/listings`) }

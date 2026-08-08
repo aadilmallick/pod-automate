@@ -3,10 +3,11 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { db } from './db/client'
-import { users, workspaces } from './db/schema'
+import { mockupTemplates, users, workspaces } from './db/schema'
 import { config } from './config'
 
 const SESSION_COOKIE = 'pod_session'
+const LOGGED_OUT_COOKIE = 'pod_logged_out'
 const STATE_COOKIE = 'pod_oauth_state'
 
 function signature(value: string) {
@@ -27,11 +28,28 @@ function verifiedSession(value?: string) {
   return timingSafeEqual(Buffer.from(provided), Buffer.from(expected)) ? userId : undefined
 }
 
+const defaultTemplates = [
+  { name: 'Studio front', type: 'deterministic', productType: 'tshirt', quantity: 1 },
+  { name: 'Street style', type: 'generative', productType: 'tshirt', quantity: 2 },
+  { name: 'Studio front', type: 'deterministic', productType: 'hoodie', quantity: 1 },
+  { name: 'Coffee shop', type: 'generative', productType: 'hoodie', quantity: 2 },
+  { name: 'Studio front', type: 'deterministic', productType: 'sweatshirt', quantity: 1 },
+  { name: 'Coffee shop', type: 'generative', productType: 'sweatshirt', quantity: 1 },
+  { name: 'In hand', type: 'deterministic', productType: 'phone-case', quantity: 1 },
+  { name: 'Living room', type: 'generative', productType: 'wall-art', quantity: 2 },
+] as const
+
+async function ensureDefaultTemplates(workspaceId: string) {
+  const existing = await db.select({ id: mockupTemplates.id }).from(mockupTemplates).where(eq(mockupTemplates.workspaceId, workspaceId)).limit(1)
+  if (existing.length) return
+  await db.insert(mockupTemplates).values(defaultTemplates.map((template) => ({ workspaceId, name: template.name, type: template.type, productType: template.productType, config: { quantity: template.quantity } })))
+}
+
 async function ensureWorkspace(userId: string) {
   const existing = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1)
-  if (existing[0]) return existing[0]
-  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1)
-  return (await db.insert(workspaces).values({ ownerId: userId, name: `${user?.name ?? 'Personal'}'s studio` }).returning())[0]
+  const workspace = existing[0] ?? (await db.insert(workspaces).values({ ownerId: userId, name: `${(await db.select().from(users).where(eq(users.id, userId)).limit(1))[0]?.name ?? 'Personal'}'s studio` }).returning())[0]
+  await ensureDefaultTemplates(workspace.id)
+  return workspace
 }
 
 export async function userFromId(userId: string) {
@@ -39,14 +57,18 @@ export async function userFromId(userId: string) {
   return user
 }
 
-export async function currentUser(c: Context) {
+export async function currentUser(c: Context, allowDevelopment = true, ignoreLoggedOut = false) {
+  if (!ignoreLoggedOut && getCookie(c, LOGGED_OUT_COOKIE) === '1') throw new Error('Authentication required')
   const cookieUserId = verifiedSession(getCookie(c, SESSION_COOKIE))
   if (cookieUserId) {
     const user = await userFromId(cookieUserId)
-    if (user) return user
+    if (user) {
+      await ensureWorkspace(user.id)
+      return user
+    }
   }
 
-  if (config.AUTH_MODE === 'google') {
+  if (config.AUTH_MODE === 'google' || !allowDevelopment) {
     throw new Error('Authentication required')
   }
 
@@ -100,15 +122,18 @@ export async function finishGoogleAuth(c: Context) {
   const existing = (await db.select().from(users).where(eq(users.email, profile.email)).limit(1))[0]
   const user = existing ? (await db.update(users).set({ googleId: profile.sub, name: profile.name ?? existing.name, updatedAt: new Date() }).where(eq(users.id, existing.id)).returning())[0] : (await db.insert(users).values({ googleId: profile.sub, email: profile.email, name: profile.name ?? profile.email }).returning())[0]
   await ensureWorkspace(user.id)
+  deleteCookie(c, LOGGED_OUT_COOKIE, { path: '/' })
   setCookie(c, SESSION_COOKIE, signedSession(user.id), { httpOnly: true, sameSite: 'Lax', secure: config.NODE_ENV === 'production', maxAge: 60 * 60 * 24 * 30, path: '/' })
   return c.redirect(config.WEB_URL)
 }
 
 export function createDevSession(c: Context, userId: string) {
+  deleteCookie(c, LOGGED_OUT_COOKIE, { path: '/' })
   setCookie(c, SESSION_COOKIE, signedSession(userId), { httpOnly: true, sameSite: 'Lax', secure: config.NODE_ENV === 'production', maxAge: 60 * 60 * 24 * 30, path: '/' })
 }
 
 export function clearSession(c: Context) {
   deleteCookie(c, SESSION_COOKIE, { path: '/' })
   deleteCookie(c, STATE_COOKIE, { path: '/' })
+  setCookie(c, LOGGED_OUT_COOKIE, '1', { httpOnly: true, sameSite: 'Lax', secure: config.NODE_ENV === 'production', maxAge: 60 * 60 * 24 * 30, path: '/' })
 }

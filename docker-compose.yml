@@ -52,6 +52,7 @@ services:
     env_file: .env
     environment:
       NODE_ENV: development
+      AUTH_MODE: ${AUTH_MODE:-google}
       HOST: 0.0.0.0
       PORT: 3000
       API_PUBLIC_PORT: ${API_PUBLIC_PORT:-3000}
@@ -79,6 +80,7 @@ services:
     env_file: .env
     environment:
       NODE_ENV: development
+      AUTH_MODE: ${AUTH_MODE:-google}
       HOST: 0.0.0.0
       PORT: 3000
       API_PUBLIC_PORT: ${API_PUBLIC_PORT:-3000}
