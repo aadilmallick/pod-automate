@@ -111,6 +111,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: web
+      args:
+        PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-}
     ports:
       - "${WEB_PORT:-5173}:80"
     depends_on:

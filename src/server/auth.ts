@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm'
 import { db } from './db/client'
 import { mockupTemplates, promptTemplates, users, workspaces, workspaceConnections } from './db/schema'
 import { config } from './config'
+import { configForDownloadedTemplate, defaultMockupTemplate, downloadedMockupTemplates } from './mockup-library'
 
 const SESSION_COOKIE = 'pod_session'
 const LOGGED_OUT_COOKIE = 'pod_logged_out'
@@ -39,10 +40,35 @@ const defaultTemplates = [
   { name: 'Living room', type: 'generative', productType: 'wall-art', quantity: 2 },
 ] as const
 
+function downloadedDefaults() {
+  return downloadedMockupTemplates().filter((template) => ['tshirt', 'hoodie', 'phone-case', 'wall-art'].includes(template.productType)).slice(0, 10).map((template) => ({
+    name: `Photo · ${template.title}`,
+    type: 'deterministic' as const,
+    productType: template.productType,
+    quantity: 1,
+    config: configForDownloadedTemplate(template),
+  }))
+}
+
 async function ensureDefaultTemplates(workspaceId: string) {
-  const existing = await db.select({ id: mockupTemplates.id }).from(mockupTemplates).where(eq(mockupTemplates.workspaceId, workspaceId)).limit(1)
-  if (existing.length) return
-  await db.insert(mockupTemplates).values(defaultTemplates.map((template) => ({ workspaceId, name: template.name, type: template.type, productType: template.productType, config: { quantity: template.quantity } })))
+  const existing = await db.select().from(mockupTemplates).where(eq(mockupTemplates.workspaceId, workspaceId)).limit(100)
+  const existingAssetPaths = new Set(existing.map((template) => (template.config as { assetPath?: string } | null)?.assetPath).filter(Boolean))
+  const additions = downloadedDefaults().filter((template) => !existingAssetPaths.has(template.config.assetPath))
+  if (!existing.length) {
+    await db.insert(mockupTemplates).values([
+      ...defaultTemplates.map((template) => ({ workspaceId, name: template.name, type: template.type, productType: template.productType, config: { quantity: template.quantity } })),
+      ...additions.map((template) => ({ workspaceId, name: template.name, type: template.type, productType: template.productType, config: { ...template.config, quantity: template.quantity } })),
+    ])
+  } else if (additions.length) {
+    await db.insert(mockupTemplates).values(additions.map((template) => ({ workspaceId, name: template.name, type: template.type, productType: template.productType, config: { ...template.config, quantity: template.quantity } })))
+  }
+  for (const template of existing) {
+    const templateConfig = template.config as { assetPath?: string; quantity?: number } | null
+    if (template.type !== 'deterministic' || templateConfig?.assetPath) continue
+    const fallback = defaultMockupTemplate(template.productType, template.name)
+    if (!fallback) continue
+    await db.update(mockupTemplates).set({ config: { ...templateConfig, ...configForDownloadedTemplate(fallback), quantity: templateConfig?.quantity ?? 1 }, updatedAt: new Date() }).where(eq(mockupTemplates.id, template.id))
+  }
 }
 
 async function ensureWorkspace(userId: string) {

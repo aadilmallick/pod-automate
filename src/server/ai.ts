@@ -67,7 +67,7 @@ export class OpenRouterImageProvider implements ImageGenerationProvider {
   readonly id = 'openrouter'
   async generateImages(request: ImageGenerationRequest) {
     if (!config.OPENROUTER_API_KEY) throw new Error('OpenRouter is not configured. Add OPENROUTER_API_KEY to .env.')
-    const response = await fetch('https://openrouter.ai/api/v1/images', { method: 'POST', headers: { Authorization: `Bearer ${config.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json', 'HTTP-Referer': config.WEB_URL, 'X-Title': 'POD Automator' }, body: JSON.stringify({ model: request.model ?? config.OPENROUTER_IMAGE_MODEL, prompt: request.prompt, n: request.count, resolution: '1K', aspect_ratio: '1:1' }) })
+    const response = await fetch('https://openrouter.ai/api/v1/images', { method: 'POST', headers: { Authorization: `Bearer ${config.OPENROUTER_API_KEY}`, 'Content-Type': 'application/json', 'HTTP-Referer': config.WEB_URL, 'X-Title': 'POD Automator' }, body: JSON.stringify({ model: request.model ?? config.OPENROUTER_IMAGE_MODEL, prompt: request.prompt, negative_prompt: request.negativePrompt, n: request.count, resolution: '1K', aspect_ratio: '1:1', ...(request.referenceImageUrls?.length ? { input_references: request.referenceImageUrls.map((url) => ({ type: 'image_url', image_url: { url } })) } : {}) }) })
     if (!response.ok) throw await responseError(response, 'OpenRouter')
     const data = await response.json() as unknown
     const urls = [...new Set(collectImageUrls(data))]
@@ -80,7 +80,7 @@ export class FalImageProvider implements ImageGenerationProvider {
   readonly id = 'fal'
   async generateImages(request: ImageGenerationRequest) {
     if (!config.FAL_API_KEY) throw new Error('Fal.ai is not configured. Add FAL_API_KEY to .env.')
-    const response = await fetch(`https://fal.run/${request.model ?? config.FAL_IMAGE_MODEL}`, { method: 'POST', headers: { Authorization: `Key ${config.FAL_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: request.prompt, num_images: request.count, image_size: { width: request.width, height: request.height }, output_format: 'png' }) })
+    const response = await fetch(`https://fal.run/${request.model ?? config.FAL_IMAGE_MODEL}`, { method: 'POST', headers: { Authorization: `Key ${config.FAL_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: request.prompt, negative_prompt: request.negativePrompt, num_images: request.count, image_size: { width: request.width, height: request.height }, output_format: 'png', ...(request.referenceImageUrls?.[0] ? { reference_image_url: request.referenceImageUrls[0] } : {}) }) })
     if (!response.ok) throw await responseError(response, 'Fal.ai')
     const data = await response.json() as unknown
     const urls = [...new Set(collectImageUrls(data))]
@@ -102,7 +102,7 @@ export class HuggingFaceImageProvider implements ImageGenerationProvider {
     const image = await this.client.textToImage({
       model: request.model ?? config.HUGGINGFACE_IMAGE_MODEL,
       inputs: request.prompt,
-      parameters: { width: request.width, height: request.height },
+      parameters: { width: request.width, height: request.height, negative_prompt: request.negativePrompt },
     }, { outputType: 'blob' })
     const buffer = Buffer.from(await image.arrayBuffer())
     return { urls: [dataUrl(buffer.toString('base64'), image.type || 'image/png')], rawResponse: { provider: 'huggingface', model: request.model ?? config.HUGGINGFACE_IMAGE_MODEL, contentType: image.type || 'image/png' } }
@@ -134,7 +134,7 @@ export class OllamaImageProvider implements ImageGenerationProvider {
     const response = await fetch(`${baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt: request.prompt, stream: false, options: { width: request.width, height: request.height } }),
+      body: JSON.stringify({ model, prompt: `${request.prompt}${request.negativePrompt ? ` Avoid: ${request.negativePrompt}.` : ''}`, stream: false, options: { width: request.width, height: request.height } }),
     })
     if (!response.ok) throw await responseError(response, 'Ollama')
     const data = await response.json() as unknown

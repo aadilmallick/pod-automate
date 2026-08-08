@@ -5,6 +5,8 @@ RUN npm ci
 COPY . .
 
 FROM base AS build
+ARG PUBLIC_SITE_URL=
+ENV PUBLIC_SITE_URL=$PUBLIC_SITE_URL
 RUN npm run build
 
 FROM base AS api

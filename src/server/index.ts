@@ -10,9 +10,10 @@ import { authStatus, clearSession, createDevSession, currentUser, finishGoogleAu
 import { dashboardCatalog } from './catalog'
 import { defaultWorkflow } from '../core/workflow'
 import { defaultModelForProvider } from './ai'
+import type { ImageStyle } from '../core/prompting'
 import { workflowQueue } from './queue'
 import { storage } from './storage'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { exportRunZip } from './zip'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,7 +25,18 @@ app.get('/uploads/*', async (c) => {
   const key = c.req.path.replace(/^\/uploads\//, '')
   try {
     const body = await storage.get(key)
-    const contentType = key.endsWith('.svg') ? 'image/svg+xml' : key.endsWith('.png') ? 'image/png' : key.endsWith('.jpg') || key.endsWith('.jpeg') ? 'image/jpeg' : 'application/octet-stream'
+    const contentType = key.endsWith('.svg') ? 'image/svg+xml' : key.endsWith('.png') ? 'image/png' : key.endsWith('.jpg') || key.endsWith('.jpeg') ? 'image/jpeg' : key.endsWith('.webp') ? 'image/webp' : 'application/octet-stream'
+    return new Response(new Uint8Array(body), { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=31536000, immutable' } })
+  } catch { return c.notFound() }
+})
+
+app.get('/mockup-assets/:category/:file', async (c) => {
+  const category = c.req.param('category')
+  const file = c.req.param('file')
+  if (!['tshirts', 'hoodies', 'posters', 'canvas', 'phone'].includes(category) || !/^[a-zA-Z0-9._-]+$/.test(file)) return c.notFound()
+  try {
+    const body = await readFile(join(resolve(fileURLToPath(new URL('../../download_mockups/', import.meta.url))), category, file))
+    const contentType = file.endsWith('.png') ? 'image/png' : file.endsWith('.jpg') || file.endsWith('.jpeg') ? 'image/jpeg' : 'image/webp'
     return new Response(new Uint8Array(body), { headers: { 'Content-Type': contentType, 'Cache-Control': 'public, max-age=31536000, immutable' } })
   } catch { return c.notFound() }
 })
@@ -38,7 +50,9 @@ app.post('/api/auth/logout', (c) => { clearSession(c); return c.json({ ok: true 
 app.get('/api/me', async (c) => { const user = await currentUser(c); return c.json({ user }) })
 
 const providerSchema = z.enum(['fal', 'openrouter', 'huggingface', 'ollama', 'mock'])
-const createRunSchema = z.object({ name: z.string().min(1).max(160), prompt: z.string().min(1).max(2000), count: z.number().int().min(1).max(100), products: z.array(z.string()).min(1), destinations: z.array(z.string()).default(['download']), provider: providerSchema.optional(), model: z.string().max(160).optional(), assetIds: z.array(z.string().uuid()).default([]), templates: z.array(z.object({ id: z.string(), name: z.string(), kind: z.enum(['deterministic', 'generative']), productType: z.string(), quantity: z.number().int().min(1).max(20) })).default([]) })
+const styleSchema = z.enum(['illustration', 'watercolor', 'editorial', 'vintage', 'flat-vector', '3d-render', 'photorealistic', 'anime'])
+const sourceSchema = z.enum(['ai', 'upload'])
+const createRunSchema = z.object({ name: z.string().min(1).max(160), prompt: z.string().min(1).max(2000), source: sourceSchema.default('ai'), style: styleSchema.default('illustration'), includeText: z.boolean().default(false), negativePrompt: z.string().max(2000).optional(), count: z.number().int().min(1).max(100), products: z.array(z.string()).min(1), destinations: z.array(z.string()).default(['download']), provider: providerSchema.optional(), model: z.string().max(160).optional(), assetIds: z.array(z.string().uuid()).default([]), templates: z.array(z.object({ id: z.string(), name: z.string(), kind: z.enum(['deterministic', 'generative']), productType: z.string(), quantity: z.number().int().min(1).max(20), config: z.record(z.unknown()).optional() })).default([]) })
 const promptTemplateSchema = z.object({ name: z.string().min(1).max(160), prompt: z.string().min(1).max(4000), provider: z.enum(['fal', 'openrouter', 'huggingface', 'ollama', 'mock']), model: z.string().max(160).optional(), description: z.string().max(255).optional() })
 const providerModels: Record<string, string[]> = { fal: [config.FAL_IMAGE_MODEL], openrouter: [config.OPENROUTER_IMAGE_MODEL], huggingface: [config.HUGGINGFACE_IMAGE_MODEL, 'black-forest-labs/FLUX.2-klein-9B'], ollama: [config.OLLAMA_IMAGE_MODEL, config.OLLAMA_IMAGE_MODEL_9B], mock: ['local-mock'] }
 const connectionSchema = z.object({ defaultModel: z.string().min(1).max(160), enabled: z.boolean() })

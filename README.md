@@ -40,6 +40,8 @@ docker compose up --build
 
 Generated assets use the local filesystem by default (`./data/uploads`). Set `STORAGE_DRIVER=s3` to use the included MinIO S3-compatible service.
 
+Set `PUBLIC_SITE_URL` to the deployed HTTPS origin so Open Graph and Twitter previews use absolute image URLs. Local builds fall back to the configured web host and port.
+
 ## Providers
 
 `OPENROUTER_API_KEY`, `FAL_API_KEY`, and `HUGGINGFACE_TOKEN` are read only by the server/worker. Choose the active provider with `AI_PROVIDER=openrouter`, `fal`, `huggingface`, `ollama`, or `mock`. The wizard also lets you select a provider and model per run.

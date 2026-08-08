@@ -1,13 +1,17 @@
 export interface RunInput {
   name: string
   prompt: string
+  source?: 'ai' | 'upload'
+  style?: import('../core/prompting').ImageStyle
+  includeText?: boolean
+  negativePrompt?: string
   count: number
   products: string[]
   destinations: string[]
   provider?: string
   model?: string
   assetIds?: string[]
-  templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }>
+  templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number; config?: Record<string, unknown> }>
 }
 
 export interface ApiRun {
@@ -36,7 +40,7 @@ export interface DashboardCatalog {
   promptTemplates: Array<{ id: string; workspaceId: string; name: string; prompt: string; provider: string; model?: string | null; description?: string | null; createdAt: string; updatedAt: string }>
   runs: Array<{ id: string; name: string; detail: string; status: string; progress: number; date: string; accent: string; jobs: Array<{ id: string; stepName: string; status: string; errorLog?: string | null }> }>
   assets: Array<{ id: string; name: string; type: string; contentType: string; url: string; background: string; accent: string; icon: string; createdAt: string }>
-  templates: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: ProductType; quantity: number; background: string; accent: string; icon: string }>
+  templates: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: ProductType; quantity: number; config?: Record<string, unknown>; previewUrl?: string; background: string; accent: string; icon: string }>
   listings: Array<{ id: string; title: string; type: string; status: string; tags: string[]; background: string; accent: string; icon: string }>
 }
 export function getAuthStatus() { return request<{ mode: 'development' | 'google'; googleConfigured: boolean; authenticated: boolean; user: SessionUser | null }>('/api/auth/status') }

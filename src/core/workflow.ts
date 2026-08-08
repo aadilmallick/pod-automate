@@ -23,6 +23,7 @@ export interface MockupTemplateSelection {
   kind: 'deterministic' | 'generative'
   productType: ProductType
   quantity: number
+  config?: Record<string, unknown>
 }
 
 export interface ProductionConfig {

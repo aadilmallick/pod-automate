@@ -4,6 +4,7 @@ import { assets, jobs, marketplaceListings, mockupTemplates, productVariants, pr
 import { storage } from './storage'
 import { workspaceForUser } from './auth'
 import { config } from './config'
+import { mockupTemplatePreviewPath } from './mockup-library'
 
 const artPalettes = [
   { background: 'linear-gradient(135deg, #f5b47e 0%, #ffdcb0 100%)', accent: '#45251b', icon: '☾' },
@@ -42,7 +43,7 @@ export async function dashboardCatalog(userId: string) {
     ],
     runs: workspaceRuns.map((run, index) => ({ id: run.id, name: workspaceWorkflows.find((workflow) => workflow.id === run.workflowId)?.name ?? 'Production run', detail: `${run.config && typeof run.config === 'object' && 'count' in run.config ? run.config.count : 0} designs · ${run.config && typeof run.config === 'object' && 'products' in run.config && Array.isArray(run.config.products) ? run.config.products.length : 0} products`, status: run.status, progress: run.progressPercent, date: run.createdAt, ...palette(index), jobs: jobsByRun.filter((job) => job.runId === run.id).map((job) => ({ id: job.id, stepName: job.stepName, status: job.status, errorLog: job.errorLog })) })),
     assets: await Promise.all(workspaceAssets.map(async (asset, index) => ({ id: asset.id, name: asset.name, type: asset.type, contentType: asset.contentType, url: await storage.getPublicUrl(asset.storagePath), ...palette(index), createdAt: asset.createdAt }))),
-    templates: templates.map((template, index) => ({ id: template.id, name: template.name, kind: template.type, productType: template.productType, quantity: Number((template.config as { quantity?: number })?.quantity ?? 1), ...palette(index) })),
+    templates: templates.map((template, index) => ({ id: template.id, name: template.name, kind: template.type, productType: template.productType, quantity: Number((template.config as { quantity?: number })?.quantity ?? 1), config: template.config as Record<string, unknown>, previewUrl: mockupTemplatePreviewPath(template.config), ...palette(index) })),
     promptTemplates: promptLibrary,
     listings: workspaceListings.map((listing, index) => { const variant = variants.find((item) => item.id === listing.productVariantId); const metadata = listing.metadata as { title?: string; tags?: string[] }; return { id: listing.id, title: metadata.title ?? `${variant?.productType ?? 'Product'} listing`, type: variant?.productType ?? 'product', status: listing.status, tags: metadata.tags ?? [], ...palette(index) } }),
   }
