@@ -3,7 +3,7 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { eq } from 'drizzle-orm'
 import { db } from './db/client'
-import { mockupTemplates, users, workspaces } from './db/schema'
+import { mockupTemplates, promptTemplates, users, workspaces, workspaceConnections } from './db/schema'
 import { config } from './config'
 
 const SESSION_COOKIE = 'pod_session'
@@ -49,6 +49,16 @@ async function ensureWorkspace(userId: string) {
   const existing = await db.select().from(workspaces).where(eq(workspaces.ownerId, userId)).limit(1)
   const workspace = existing[0] ?? (await db.insert(workspaces).values({ ownerId: userId, name: `${(await db.select().from(users).where(eq(users.id, userId)).limit(1))[0]?.name ?? 'Personal'}'s studio` }).returning())[0]
   await ensureDefaultTemplates(workspace.id)
+  const existingPrompts = await db.select({ id: promptTemplates.id }).from(promptTemplates).where(eq(promptTemplates.workspaceId, workspace.id)).limit(1)
+  if (!existingPrompts.length) await db.insert(promptTemplates).values([
+    { workspaceId: workspace.id, name: 'Funny cat collection', prompt: 'Funny cat designs for people who take their naps seriously', provider: 'fal', model: config.FAL_IMAGE_MODEL, description: 'Playful, centered POD artwork with bold clean color.' },
+    { workspaceId: workspace.id, name: 'Minimal botanical set', prompt: 'A minimal botanical illustration with crisp linework, warm paper texture and a centered composition', provider: 'fal', model: config.FAL_IMAGE_MODEL, description: 'Soft editorial artwork for apparel and wall art.' },
+  ])
+  const existingConnections = await db.select({ id: workspaceConnections.id }).from(workspaceConnections).where(eq(workspaceConnections.workspaceId, workspace.id)).limit(1)
+  if (!existingConnections.length) await db.insert(workspaceConnections).values([
+    { workspaceId: workspace.id, provider: 'fal', defaultModel: config.FAL_IMAGE_MODEL },
+    { workspaceId: workspace.id, provider: 'openrouter', defaultModel: config.OPENROUTER_IMAGE_MODEL },
+  ])
   return workspace
 }
 

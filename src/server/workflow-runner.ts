@@ -7,7 +7,7 @@ import { storage } from './storage'
 import { redis } from './queue'
 import { config } from './config'
 
-interface RunPayload { runId: string; workspaceId: string; prompt: string; count: number; products: string[]; destinations: string[]; provider?: string; assetIds?: string[]; templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }> }
+interface RunPayload { runId: string; workspaceId: string; prompt: string; count: number; products: string[]; destinations: string[]; provider?: string; model?: string; assetIds?: string[]; templates?: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: string; quantity: number }> }
 
 async function updateRun(runId: string, progressPercent: number, status: string, errorLog?: string) { await db.update(runs).set({ progressPercent, status, ...(errorLog ? { errorLog } : {}), updatedAt: new Date() }).where(eq(runs.id, runId)) }
 
@@ -32,9 +32,9 @@ function imageFormat(buffer: Buffer) {
 }
 
 async function processRun(job: Job<RunPayload>) {
-  const { runId, workspaceId, prompt, count, products, destinations, provider, assetIds = [], templates = [] } = job.data
+  const { runId, workspaceId, prompt, count, products, destinations, provider, model: configuredModel, assetIds = [], templates = [] } = job.data
   const effectiveProvider = provider ?? config.AI_PROVIDER
-  const model = effectiveProvider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL
+  const model = configuredModel ?? (effectiveProvider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL)
   await updateRun(runId, 5, 'running')
   await updateJob(runId, 'workflow:start', 'running')
   const designIds: string[] = []

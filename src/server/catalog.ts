@@ -1,6 +1,6 @@
 import { desc, eq, inArray } from 'drizzle-orm'
 import { db } from './db/client'
-import { assets, jobs, marketplaceListings, mockupTemplates, productVariants, runs, workflows } from './db/schema'
+import { assets, jobs, marketplaceListings, mockupTemplates, productVariants, promptTemplates, runs, workflows, workspaceConnections } from './db/schema'
 import { storage } from './storage'
 import { workspaceForUser } from './auth'
 import { config } from './config'
@@ -18,7 +18,7 @@ function palette(index: number) { return artPalettes[index % artPalettes.length]
 
 export async function dashboardCatalog(userId: string) {
   const workspace = await workspaceForUser(userId)
-  if (!workspace) return { runs: [], assets: [], templates: [], listings: [], connections: [], stats: { workflows: 0, assets: 0, readyListings: 0 } }
+  if (!workspace) return { runs: [], assets: [], templates: [], promptTemplates: [], listings: [], connections: [], stats: { workflows: 0, assets: 0, readyListings: 0 } }
   const workspaceWorkflows = await db.select().from(workflows).where(eq(workflows.workspaceId, workspace.id)).orderBy(desc(workflows.createdAt))
   const workflowIds = workspaceWorkflows.map((workflow) => workflow.id)
   const workspaceRuns = workflowIds.length ? await db.select().from(runs).where(inArray(runs.workflowId, workflowIds)).orderBy(desc(runs.createdAt)).limit(25) : []
@@ -28,17 +28,20 @@ export async function dashboardCatalog(userId: string) {
   const variantIds = variants.map((variant) => variant.id)
   const workspaceListings = variantIds.length ? await db.select().from(marketplaceListings).where(inArray(marketplaceListings.productVariantId, variantIds)).orderBy(desc(marketplaceListings.createdAt)).limit(100) : []
   const templates = await db.select().from(mockupTemplates).where(eq(mockupTemplates.workspaceId, workspace.id)).orderBy(desc(mockupTemplates.createdAt)).limit(24)
+  const promptLibrary = await db.select().from(promptTemplates).where(eq(promptTemplates.workspaceId, workspace.id)).orderBy(desc(promptTemplates.createdAt)).limit(50)
+  const savedConnections = await db.select().from(workspaceConnections).where(eq(workspaceConnections.workspaceId, workspace.id))
   const jobsByRun = runIds.length ? await db.select().from(jobs).where(inArray(jobs.runId, runIds)) : []
   return {
     stats: { workflows: workspaceWorkflows.length, assets: workspaceAssets.length, readyListings: workspaceListings.filter((listing) => listing.status === 'ready' || listing.status === 'draft').length },
     connections: [
-      { id: 'openrouter', name: 'OpenRouter', configured: Boolean(config.OPENROUTER_API_KEY), detail: 'Image generation · credits required' },
-      { id: 'fal', name: 'Fal.ai', configured: Boolean(config.FAL_API_KEY), detail: 'Image generation · Flux Schnell' },
-      { id: 'storage', name: config.STORAGE_DRIVER === 's3' ? 'S3-compatible storage' : 'Local storage', configured: true, detail: 'Asset persistence' },
+      { id: 'openrouter', name: 'OpenRouter', configured: Boolean(config.OPENROUTER_API_KEY), enabled: savedConnections.find((item) => item.provider === 'openrouter')?.enabled !== 'false', detail: 'Image generation · credits required', defaultModel: savedConnections.find((item) => item.provider === 'openrouter')?.defaultModel ?? config.OPENROUTER_IMAGE_MODEL },
+      { id: 'fal', name: 'Fal.ai', configured: Boolean(config.FAL_API_KEY), enabled: savedConnections.find((item) => item.provider === 'fal')?.enabled !== 'false', detail: 'Image generation · Flux Schnell', defaultModel: savedConnections.find((item) => item.provider === 'fal')?.defaultModel ?? config.FAL_IMAGE_MODEL },
+      { id: 'storage', name: config.STORAGE_DRIVER === 's3' ? 'S3-compatible storage' : 'Local storage', configured: true, enabled: true, detail: 'Asset persistence', defaultModel: '' },
     ],
     runs: workspaceRuns.map((run, index) => ({ id: run.id, name: workspaceWorkflows.find((workflow) => workflow.id === run.workflowId)?.name ?? 'Production run', detail: `${run.config && typeof run.config === 'object' && 'count' in run.config ? run.config.count : 0} designs · ${run.config && typeof run.config === 'object' && 'products' in run.config && Array.isArray(run.config.products) ? run.config.products.length : 0} products`, status: run.status, progress: run.progressPercent, date: run.createdAt, ...palette(index), jobs: jobsByRun.filter((job) => job.runId === run.id).map((job) => ({ id: job.id, stepName: job.stepName, status: job.status, errorLog: job.errorLog })) })),
     assets: await Promise.all(workspaceAssets.map(async (asset, index) => ({ id: asset.id, name: asset.name, type: asset.type, contentType: asset.contentType, url: await storage.getPublicUrl(asset.storagePath), ...palette(index), createdAt: asset.createdAt }))),
     templates: templates.map((template, index) => ({ id: template.id, name: template.name, kind: template.type, productType: template.productType, quantity: Number((template.config as { quantity?: number })?.quantity ?? 1), ...palette(index) })),
+    promptTemplates: promptLibrary,
     listings: workspaceListings.map((listing, index) => { const variant = variants.find((item) => item.id === listing.productVariantId); const metadata = listing.metadata as { title?: string; tags?: string[] }; return { id: listing.id, title: metadata.title ?? `${variant?.productType ?? 'Product'} listing`, type: variant?.productType ?? 'product', status: listing.status, tags: metadata.tags ?? [], ...palette(index) } }),
   }
 }

@@ -12,11 +12,18 @@ const statements = [
   sql`UPDATE assets SET workspace_id = workflows.workspace_id FROM runs JOIN workflows ON runs.workflow_id = workflows.id WHERE assets.run_id = runs.id AND assets.workspace_id IS NULL`,
   sql`CREATE TABLE IF NOT EXISTS product_variants (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), run_id uuid NOT NULL REFERENCES runs(id), design_asset_id uuid NOT NULL REFERENCES assets(id), product_type varchar(40) NOT NULL, status varchar(30) NOT NULL DEFAULT 'pending', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS mockup_templates (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspaces(id), name varchar(160) NOT NULL, type varchar(30) NOT NULL, product_type varchar(40) NOT NULL, config jsonb NOT NULL, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
+  sql`CREATE TABLE IF NOT EXISTS prompt_templates (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspaces(id), name varchar(160) NOT NULL, prompt text NOT NULL, provider varchar(40) NOT NULL DEFAULT 'fal', model varchar(160), description varchar(255), created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
+  sql`CREATE TABLE IF NOT EXISTS workspace_connections (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspaces(id), provider varchar(40) NOT NULL, default_model varchar(160) NOT NULL, enabled varchar(10) NOT NULL DEFAULT 'true', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS mockups (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_variant_id uuid NOT NULL REFERENCES product_variants(id), template_id uuid REFERENCES mockup_templates(id), storage_path text, status varchar(30) NOT NULL DEFAULT 'pending', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS marketplace_listings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_variant_id uuid NOT NULL REFERENCES product_variants(id), marketplace varchar(40) NOT NULL, external_id varchar(255), status varchar(30) NOT NULL DEFAULT 'draft', metadata jsonb NOT NULL DEFAULT '{}', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), run_id uuid NOT NULL REFERENCES runs(id), step_name varchar(80) NOT NULL, status varchar(30) NOT NULL DEFAULT 'queued', retry_count integer NOT NULL DEFAULT 0, error_log text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
 ]
 
-for (const statement of statements) await db.execute(statement)
-await pool.end()
+await db.execute(sql`SELECT pg_advisory_lock(hashtext('pod-automator-bootstrap'))`)
+try {
+  for (const statement of statements) await db.execute(statement)
+} finally {
+  await db.execute(sql`SELECT pg_advisory_unlock(hashtext('pod-automator-bootstrap'))`)
+  await pool.end()
+}
 console.log('Database schema ready')
