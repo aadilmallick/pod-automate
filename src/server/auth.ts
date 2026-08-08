@@ -53,12 +53,17 @@ async function ensureWorkspace(userId: string) {
   if (!existingPrompts.length) await db.insert(promptTemplates).values([
     { workspaceId: workspace.id, name: 'Funny cat collection', prompt: 'Funny cat designs for people who take their naps seriously', provider: 'fal', model: config.FAL_IMAGE_MODEL, description: 'Playful, centered POD artwork with bold clean color.' },
     { workspaceId: workspace.id, name: 'Minimal botanical set', prompt: 'A minimal botanical illustration with crisp linework, warm paper texture and a centered composition', provider: 'fal', model: config.FAL_IMAGE_MODEL, description: 'Soft editorial artwork for apparel and wall art.' },
+    { workspaceId: workspace.id, name: 'Flux Klein typography', prompt: 'A bold, readable typographic poster with clean composition and a premium editorial finish', provider: 'ollama', model: config.OLLAMA_IMAGE_MODEL, description: 'Local FLUX.2 Klein generation for crisp text and layouts.' },
   ])
-  const existingConnections = await db.select({ id: workspaceConnections.id }).from(workspaceConnections).where(eq(workspaceConnections.workspaceId, workspace.id)).limit(1)
-  if (!existingConnections.length) await db.insert(workspaceConnections).values([
-    { workspaceId: workspace.id, provider: 'fal', defaultModel: config.FAL_IMAGE_MODEL },
-    { workspaceId: workspace.id, provider: 'openrouter', defaultModel: config.OPENROUTER_IMAGE_MODEL },
-  ])
+  const existingConnections = await db.select({ provider: workspaceConnections.provider }).from(workspaceConnections).where(eq(workspaceConnections.workspaceId, workspace.id))
+  const defaultConnections = [
+    { provider: 'fal', defaultModel: config.FAL_IMAGE_MODEL },
+    { provider: 'openrouter', defaultModel: config.OPENROUTER_IMAGE_MODEL },
+    { provider: 'huggingface', defaultModel: config.HUGGINGFACE_IMAGE_MODEL },
+    { provider: 'ollama', defaultModel: config.OLLAMA_IMAGE_MODEL },
+  ]
+  const missingConnections = defaultConnections.filter((connection) => !existingConnections.some((item) => item.provider === connection.provider))
+  if (missingConnections.length) await db.insert(workspaceConnections).values(missingConnections.map((connection) => ({ workspaceId: workspace.id, ...connection })))
   return workspace
 }
 

@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer'
+import { InferenceClient } from '@huggingface/inference'
 import type { ImageGenerationProvider, ImageGenerationRequest } from '../core/interfaces/providers'
 import { config } from './config'
 
@@ -12,6 +13,11 @@ function dataUrl(value: string, mediaType = 'image/png') {
 }
 
 function collectImageUrls(value: unknown, output: string[] = [], imageHint = false): string[] {
+  if (typeof value === 'string') {
+    if (value.startsWith('data:image/') || value.startsWith('http://') || value.startsWith('https://')) output.push(value)
+    else if (imageHint && value.length > 100) output.push(dataUrl(value))
+    return output
+  }
   if (Array.isArray(value)) {
     for (const item of value) collectImageUrls(item, output, imageHint)
     return output
@@ -29,7 +35,7 @@ function collectImageUrls(value: unknown, output: string[] = [], imageHint = fal
     if (typeof inline.data === 'string') output.push(dataUrl(inline.data, typeof inline.mime_type === 'string' ? inline.mime_type : 'image/png'))
   }
   for (const [key, child] of Object.entries(record)) {
-    if (key !== 'image_url' && key !== 'inline_data') collectImageUrls(child, output, isImage || ['images', 'image', 'content', 'parts', 'output'].includes(key))
+    if (key !== 'image_url' && key !== 'inline_data') collectImageUrls(child, output, isImage || ['images', 'image', 'content', 'parts', 'output', 'response', 'generated_image'].includes(key))
   }
   return output
 }
@@ -42,6 +48,14 @@ async function responseError(response: Response, provider: string) {
     detail = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message ?? parsed.message ?? detail
   } catch { /* keep text */ }
   return new Error(`${provider} request failed (${response.status}): ${detail || response.statusText}`)
+}
+
+export function defaultModelForProvider(provider: string) {
+  if (provider === 'fal') return config.FAL_IMAGE_MODEL
+  if (provider === 'openrouter') return config.OPENROUTER_IMAGE_MODEL
+  if (provider === 'huggingface') return config.HUGGINGFACE_IMAGE_MODEL
+  if (provider === 'ollama') return config.OLLAMA_IMAGE_MODEL
+  return 'local-mock'
 }
 
 export class MockImageProvider implements ImageGenerationProvider {
@@ -75,7 +89,67 @@ export class FalImageProvider implements ImageGenerationProvider {
   }
 }
 
-export function imageProvider(id: string = config.AI_PROVIDER): ImageGenerationProvider { return id === 'fal' ? new FalImageProvider() : id === 'mock' ? new MockImageProvider() : new OpenRouterImageProvider() }
+export class HuggingFaceImageProvider implements ImageGenerationProvider {
+  readonly id = 'huggingface'
+  private readonly client: InferenceClient
+
+  constructor() {
+    if (!config.HUGGINGFACE_TOKEN) throw new Error('Hugging Face is not configured. Add HUGGINGFACE_TOKEN to .env.')
+    this.client = new InferenceClient(config.HUGGINGFACE_TOKEN)
+  }
+
+  async generateImages(request: ImageGenerationRequest) {
+    const image = await this.client.textToImage({
+      model: request.model ?? config.HUGGINGFACE_IMAGE_MODEL,
+      inputs: request.prompt,
+      parameters: { width: request.width, height: request.height },
+    }, { outputType: 'blob' })
+    const buffer = Buffer.from(await image.arrayBuffer())
+    return { urls: [dataUrl(buffer.toString('base64'), image.type || 'image/png')], rawResponse: { provider: 'huggingface', model: request.model ?? config.HUGGINGFACE_IMAGE_MODEL, contentType: image.type || 'image/png' } }
+  }
+}
+
+function collectOllamaImageUrls(value: unknown, output: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectOllamaImageUrls(item, output)
+    return output
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && value.length > 100 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)) output.push(dataUrl(value))
+    return output
+  }
+  const record = value as Record<string, unknown>
+  for (const key of ['image', 'images', 'base64', 'b64_json', 'data', 'response', 'output', 'generated_image']) {
+    if (key in record) collectOllamaImageUrls(record[key], output)
+  }
+  return output
+}
+
+export class OllamaImageProvider implements ImageGenerationProvider {
+  readonly id = 'ollama'
+
+  async generateImages(request: ImageGenerationRequest) {
+    const baseUrl = config.OLLAMA_BASE_URL.replace(/\/$/, '')
+    const model = request.model ?? config.OLLAMA_IMAGE_MODEL
+    const response = await fetch(`${baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: request.prompt, stream: false, options: { width: request.width, height: request.height } }),
+    })
+    if (!response.ok) throw await responseError(response, 'Ollama')
+    const data = await response.json() as unknown
+    const urls = [...new Set(collectOllamaImageUrls(data))]
+    if (!urls.length) throw new Error(`Ollama returned no image data for ${model}. Pull the model first with \"ollama pull ${model}\" and confirm image generation is supported on this host.`)
+    return { urls, rawResponse: data }
+  }
+}
+
+export function imageProvider(id: string = config.AI_PROVIDER): ImageGenerationProvider {
+  if (id === 'fal') return new FalImageProvider()
+  if (id === 'huggingface') return new HuggingFaceImageProvider()
+  if (id === 'ollama') return new OllamaImageProvider()
+  return id === 'mock' ? new MockImageProvider() : new OpenRouterImageProvider()
+}
 
 export async function generateImages(provider: ImageGenerationProvider, request: ImageGenerationRequest) {
   const urls: string[] = []

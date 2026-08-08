@@ -2,7 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { Worker, type Job } from 'bullmq'
 import { db } from './db/client'
 import { assets, jobs, marketplaceListings, mockups, productVariants, runs } from './db/schema'
-import { generateImages, imageProvider } from './ai'
+import { defaultModelForProvider, generateImages, imageProvider } from './ai'
 import { storage } from './storage'
 import { redis } from './queue'
 import { config } from './config'
@@ -34,7 +34,7 @@ function imageFormat(buffer: Buffer) {
 async function processRun(job: Job<RunPayload>) {
   const { runId, workspaceId, prompt, count, products, destinations, provider, model: configuredModel, assetIds = [], templates = [] } = job.data
   const effectiveProvider = provider ?? config.AI_PROVIDER
-  const model = configuredModel ?? (effectiveProvider === 'fal' ? config.FAL_IMAGE_MODEL : config.OPENROUTER_IMAGE_MODEL)
+  const model = configuredModel || defaultModelForProvider(effectiveProvider)
   await updateRun(runId, 5, 'running')
   await updateJob(runId, 'workflow:start', 'running')
   const designIds: string[] = []

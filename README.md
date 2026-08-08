@@ -42,7 +42,11 @@ Generated assets use the local filesystem by default (`./data/uploads`). Set `ST
 
 ## Providers
 
-`OPENROUTER_API_KEY` and `FAL_API_KEY` are read only by the server/worker. Choose the active provider with `AI_PROVIDER=openrouter` or `AI_PROVIDER=fal`. The wizard also lets you select a provider per run. The default OpenRouter image model is `google/gemini-3.1-flash-image`; the default Fal model is `fal-ai/flux/schnell`.
+`OPENROUTER_API_KEY`, `FAL_API_KEY`, and `HUGGINGFACE_TOKEN` are read only by the server/worker. Choose the active provider with `AI_PROVIDER=openrouter`, `fal`, `huggingface`, `ollama`, or `mock`. The wizard also lets you select a provider and model per run.
+
+- Hugging Face uses `@huggingface/inference` and `HUGGINGFACE_IMAGE_MODEL` (default: `black-forest-labs/FLUX.2-klein-9B`). Add `HUGGINGFACE_TOKEN` to `.env` before testing or launching a Hugging Face workflow.
+- Ollama uses its local HTTP API at `OLLAMA_BASE_URL` (default: `http://localhost:11434`). The default model is `x/flux2-klein`; `x/flux2-klein:9b` is also available. Pull a model first with `ollama pull x/flux2-klein` or `ollama pull x/flux2-klein:9b`. The Compose Ollama service is behind the optional `ollama` profile; start it with `docker compose --profile ollama up -d ollama`, then set `OLLAMA_BASE_URL=http://ollama:11434` in `.env`.
+- The Ollama image-generation model is experimental and currently has host/runtime limitations documented by Ollama. The app reports a clear connection/model status instead of silently falling back.
 
 The `mock` provider is useful for local smoke tests without inference cost.
 
@@ -62,7 +66,7 @@ Development mode creates a signed local session automatically. For Google OAuth:
 - PostgreSQL + Drizzle schema
 - Redis + BullMQ worker
 - Local filesystem or MinIO/S3-compatible storage
-- OpenRouter, Fal.ai, and mock image provider adapters
+- OpenRouter, Fal.ai, Hugging Face, Ollama, and mock image provider adapters
 - Workspace → workflow → run → assets → product variants → mockups → listings
 
 ## Checks

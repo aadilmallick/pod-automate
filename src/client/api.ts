@@ -32,7 +32,7 @@ import type { ProductType } from '../core/interfaces/providers'
 
 export interface DashboardCatalog {
   stats: { workflows: number; assets: number; readyListings: number }
-  connections: Array<{ id: string; name: string; configured: boolean; enabled: boolean; detail: string; defaultModel: string }>
+  connections: Array<{ id: string; name: string; configured: boolean; enabled: boolean; detail: string; defaultModel: string; models: string[] }>
   promptTemplates: Array<{ id: string; workspaceId: string; name: string; prompt: string; provider: string; model?: string | null; description?: string | null; createdAt: string; updatedAt: string }>
   runs: Array<{ id: string; name: string; detail: string; status: string; progress: number; date: string; accent: string; jobs: Array<{ id: string; stepName: string; status: string; errorLog?: string | null }> }>
   assets: Array<{ id: string; name: string; type: string; contentType: string; url: string; background: string; accent: string; icon: string; createdAt: string }>
