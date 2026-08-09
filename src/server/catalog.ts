@@ -5,6 +5,7 @@ import { storage } from './storage'
 import { workspaceForUser } from './auth'
 import { config } from './config'
 import { mockupTemplatePreviewPath } from './mockup-library'
+import { backgroundRemovalConfigured } from './transformations'
 
 const artPalettes = [
   { background: 'linear-gradient(135deg, #f5b47e 0%, #ffdcb0 100%)', accent: '#45251b', icon: '☾' },
@@ -39,6 +40,8 @@ export async function dashboardCatalog(userId: string) {
       { id: 'fal', name: 'Fal.ai', configured: Boolean(config.FAL_API_KEY), enabled: savedConnections.find((item) => item.provider === 'fal')?.enabled !== 'false', detail: 'Image generation · Flux Schnell', defaultModel: savedConnections.find((item) => item.provider === 'fal')?.defaultModel ?? config.FAL_IMAGE_MODEL, models: [config.FAL_IMAGE_MODEL] },
       { id: 'huggingface', name: 'Hugging Face', configured: Boolean(config.HUGGINGFACE_TOKEN), enabled: savedConnections.find((item) => item.provider === 'huggingface')?.enabled !== 'false', detail: 'Inference API · text to image', defaultModel: savedConnections.find((item) => item.provider === 'huggingface')?.defaultModel ?? config.HUGGINGFACE_IMAGE_MODEL, models: [config.HUGGINGFACE_IMAGE_MODEL, 'black-forest-labs/FLUX.2-klein-9B'] },
       { id: 'ollama', name: 'Ollama', configured: config.OLLAMA_CONFIGURED, enabled: savedConnections.find((item) => item.provider === 'ollama')?.enabled !== 'false', detail: 'Local inference · test connection before running', defaultModel: savedConnections.find((item) => item.provider === 'ollama')?.defaultModel ?? config.OLLAMA_IMAGE_MODEL, models: [config.OLLAMA_IMAGE_MODEL, config.OLLAMA_IMAGE_MODEL_9B] },
+      { id: 'gemini', name: 'Gemini · Nano Banana Pro', capability: 'mockup', configured: Boolean(config.GEMINI_API_KEY), enabled: savedConnections.find((item) => item.provider === 'gemini')?.enabled !== 'false', detail: 'Generative mockups · preserves source artwork', defaultModel: savedConnections.find((item) => item.provider === 'gemini')?.defaultModel ?? config.GEMINI_MOCKUP_MODEL, models: [config.GEMINI_MOCKUP_MODEL] },
+      { id: 'bg-removal', name: 'Background removal', capability: 'transform', configured: backgroundRemovalConfigured(), enabled: savedConnections.find((item) => item.provider === 'bg-removal')?.enabled !== 'false', detail: 'Offline ONNX model · prepares designs before mockups', defaultModel: config.TRANSFORM_DRIVER, models: ['auto', 'sharp', 'imgly', 'none'] },
       { id: 'storage', name: config.STORAGE_DRIVER === 's3' ? 'S3-compatible storage' : 'Local storage', configured: true, enabled: true, detail: 'Asset persistence', defaultModel: '', models: [] },
     ],
     runs: workspaceRuns.map((run, index) => ({ id: run.id, name: workspaceWorkflows.find((workflow) => workflow.id === run.workflowId)?.name ?? 'Production run', detail: `${run.config && typeof run.config === 'object' && 'count' in run.config ? run.config.count : 0} designs · ${run.config && typeof run.config === 'object' && 'products' in run.config && Array.isArray(run.config.products) ? run.config.products.length : 0} products`, status: run.status, progress: run.progressPercent, date: run.createdAt, ...palette(index), jobs: jobsByRun.filter((job) => job.runId === run.id).map((job) => ({ id: job.id, stepName: job.stepName, status: job.status, errorLog: job.errorLog })) })),

@@ -17,6 +17,15 @@ const statements = [
   sql`ALTER TABLE workspace_connections ADD COLUMN IF NOT EXISTS enabled varchar(10) NOT NULL DEFAULT 'true'`,
   sql`CREATE TABLE IF NOT EXISTS mockups (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_variant_id uuid NOT NULL REFERENCES product_variants(id), template_id uuid REFERENCES mockup_templates(id), storage_path text, status varchar(30) NOT NULL DEFAULT 'pending', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS marketplace_listings (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), product_variant_id uuid NOT NULL REFERENCES product_variants(id), marketplace varchar(40) NOT NULL, external_id varchar(255), status varchar(30) NOT NULL DEFAULT 'draft', metadata jsonb NOT NULL DEFAULT '{}', created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
+  sql`ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS external_url text`,
+  sql`ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS last_error text`,
+  sql`ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS failed_stage varchar(30)`,
+  sql`ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS synced_at timestamp`,
+  sql`ALTER TABLE marketplace_listings ADD COLUMN IF NOT EXISTS published_at timestamp`,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS marketplace_listings_variant_marketplace ON marketplace_listings(product_variant_id, marketplace)`,
+  sql`CREATE TABLE IF NOT EXISTS marketplace_connections (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspaces(id), provider varchar(40) NOT NULL, access_token_encrypted text, refresh_token_encrypted text, token_expires_at timestamp, scopes text[] NOT NULL DEFAULT '{}', external_account_id varchar(255), external_account_name varchar(255), state varchar(30) NOT NULL DEFAULT 'disconnected', settings jsonb NOT NULL DEFAULT '{}', last_error text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
+  sql`CREATE UNIQUE INDEX IF NOT EXISTS marketplace_connections_workspace_provider ON marketplace_connections(workspace_id, provider)`,
+  sql`CREATE TABLE IF NOT EXISTS marketplace_oauth_sessions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), workspace_id uuid NOT NULL REFERENCES workspaces(id), provider varchar(40) NOT NULL, state_hash varchar(64) NOT NULL UNIQUE, verifier_encrypted text NOT NULL, expires_at timestamp NOT NULL, consumed_at timestamp, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
   sql`CREATE TABLE IF NOT EXISTS jobs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), run_id uuid NOT NULL REFERENCES runs(id), step_name varchar(80) NOT NULL, status varchar(30) NOT NULL DEFAULT 'queued', retry_count integer NOT NULL DEFAULT 0, error_log text, created_at timestamp NOT NULL DEFAULT now(), updated_at timestamp NOT NULL DEFAULT now())`,
 ]
 

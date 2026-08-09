@@ -53,4 +53,15 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3p
 .prompt-controls .toggle-label { margin: 0; }
 .prompt-controls > label:not(.toggle-label) { display: block; color: #64656e; font-size: 10px; font-weight: 600; }
 .negative-prompt-input { display: block; width: 100%; margin-top: 7px; border: 1px solid #dedee5; border-radius: 7px; padding: 10px; background: #fff; color: #44454d; font: 10px/1.45 'DM Sans'; resize: vertical; }
+.listing-row-button { width: 100%; text-align: left; background: transparent; }
+.etsy-listing-modal { width: min(780px, 100%); }
+.etsy-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.field-title { display: block; color: #64656e; font-size: 10px; margin-bottom: 8px; }
+.etsy-image-order { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.etsy-image-order > div { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.etsy-image-order img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+.etsy-image-order small { display: block; padding: 5px; color: #777; }
+.etsy-image-order span { display: flex; justify-content: space-between; padding: 0 5px 5px; }
+.etsy-image-order button { background: #f2f1f7; color: var(--violet); border-radius: 4px; }
+.outline-button.disabled { pointer-events: none; opacity: .45; }
 @media (max-width: 900px) { .style-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
