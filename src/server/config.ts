@@ -25,9 +25,11 @@ const envSchema = z.object({
   FAL_IMAGE_MODEL: z.string().default('fal-ai/flux/schnell'),
   HUGGINGFACE_TOKEN: z.string().optional(),
   HUGGINGFACE_IMAGE_MODEL: z.string().default('black-forest-labs/FLUX.2-klein-9B'),
+  // Ollama is intentionally usable with no .env entry: the SDK defaults to the local service.
   OLLAMA_BASE_URL: z.string().url().default('http://localhost:11434'),
   OLLAMA_IMAGE_MODEL: z.string().default('x/flux2-klein'),
   OLLAMA_IMAGE_MODEL_9B: z.string().default('x/flux2-klein:9b'),
+  OLLAMA_IMAGE_MODEL_PREFIX: z.string().default('x/'),
   AI_PROVIDER: z.enum(['openrouter', 'fal', 'huggingface', 'ollama', 'mock']).default('openrouter'),
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   STORAGE_DIR: z.string().default('./data/uploads'),
@@ -50,7 +52,6 @@ export const config = {
   WEB_URL: webUrl,
   GOOGLE_REDIRECT_URI: envSchema.GOOGLE_REDIRECT_URI ?? `${appUrl}/api/auth/google/callback`,
   PUBLIC_ASSET_URL: envSchema.PUBLIC_ASSET_URL ?? `${appUrl}/uploads`,
-  OLLAMA_CONFIGURED: Boolean(process.env.OLLAMA_BASE_URL),
 }
 
 if (config.NODE_ENV === 'production' && config.AUTH_MODE !== 'google') {

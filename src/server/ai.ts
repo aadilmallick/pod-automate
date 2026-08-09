@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { InferenceClient } from '@huggingface/inference'
 import type { ImageGenerationProvider, ImageGenerationRequest } from '../core/interfaces/providers'
+import { ollamaClient } from './ollama'
 import { config } from './config'
 
 function svgDataUrl(label: string, hue: string) {
@@ -109,38 +110,27 @@ export class HuggingFaceImageProvider implements ImageGenerationProvider {
   }
 }
 
-function collectOllamaImageUrls(value: unknown, output: string[] = []): string[] {
-  if (Array.isArray(value)) {
-    for (const item of value) collectOllamaImageUrls(item, output)
-    return output
-  }
-  if (!value || typeof value !== 'object') {
-    if (typeof value === 'string' && value.length > 100 && /^[A-Za-z0-9+/]+={0,2}$/.test(value)) output.push(dataUrl(value))
-    return output
-  }
-  const record = value as Record<string, unknown>
-  for (const key of ['image', 'images', 'base64', 'b64_json', 'data', 'response', 'output', 'generated_image']) {
-    if (key in record) collectOllamaImageUrls(record[key], output)
-  }
-  return output
-}
-
 export class OllamaImageProvider implements ImageGenerationProvider {
   readonly id = 'ollama'
 
   async generateImages(request: ImageGenerationRequest) {
-    const baseUrl = config.OLLAMA_BASE_URL.replace(/\/$/, '')
     const model = request.model ?? config.OLLAMA_IMAGE_MODEL
-    const response = await fetch(`${baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt: `${request.prompt}${request.negativePrompt ? ` Avoid: ${request.negativePrompt}.` : ''}`, stream: false, options: { width: request.width, height: request.height } }),
-    })
-    if (!response.ok) throw await responseError(response, 'Ollama')
-    const data = await response.json() as unknown
-    const urls = [...new Set(collectOllamaImageUrls(data))]
-    if (!urls.length) throw new Error(`Ollama returned no image data for ${model}. Pull the model first with \"ollama pull ${model}\" and confirm image generation is supported on this host.`)
-    return { urls, rawResponse: data }
+    const prompt = `${request.prompt}${request.negativePrompt ? ` Avoid: ${request.negativePrompt}.` : ''}`
+    try {
+      // x/* image models stream progress and emit the final image as base64.
+      const stream = await ollamaClient().generate({ model, prompt, stream: true })
+      const urls: string[] = []
+      for await (const part of stream) {
+        const image = (part as typeof part & { image?: string }).image
+        if (typeof image === 'string' && image.length > 0) urls.push(dataUrl(image))
+      }
+      if (!urls.length) throw new Error(`Ollama returned no image data for ${model}. Pull the model first with "ollama pull ${model}" and confirm image generation is supported on this host.`)
+      return { urls, rawResponse: { provider: 'ollama', model, imageCount: urls.length } }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Ollama returned no image data')) throw error
+      const detail = error instanceof Error ? error.message : 'Unknown Ollama error'
+      throw new Error(`Ollama image generation failed for ${model}: ${detail}`)
+    }
   }
 }
 

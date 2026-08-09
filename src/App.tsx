@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import FsLightbox from 'fslightbox-react'
 import type { ProductType } from './core/interfaces/providers'
 import { imageStyleOptions, type ImageStyle } from './core/prompting'
 import { estimateMockups, estimateProducts } from './core/workflow'
 import { productOptions } from './data/catalog'
-import { createDevSession, createPromptTemplate, createRun, deletePromptTemplate, getAuthStatus, getDashboardCatalog, getRun, logout, testConnection, updateConnection, updatePromptTemplate, uploadAsset, type DashboardCatalog, type SessionUser } from './client/api'
+import { createDevSession, createPromptTemplate, createRun, deletePromptTemplate, getAuthStatus, getDashboardCatalog, getRun, logout, testConnection, updateConnection, updateMockupTemplate, updatePromptTemplate, uploadAsset, type DashboardCatalog, type SessionUser } from './client/api'
 
 type View = 'dashboard' | 'workflows' | 'templates' | 'connections' | 'assets' | 'run'
 type WizardStep = 'start' | 'source' | 'review' | 'products' | 'destinations' | 'summary'
@@ -53,6 +54,8 @@ function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<Array<{ id: string; name: string; url: string; previewUrl?: string }>>([])
   const [templateEditor, setTemplateEditor] = useState<{ id?: string; name: string; prompt: string; provider: string; model: string; description: string } | null>(null)
+  const [mockupEditor, setMockupEditor] = useState<{ template: DashboardCatalog['templates'][number]; points: AnnotationPoint[] } | null>(null)
+  const [mockupSaveMessage, setMockupSaveMessage] = useState<string | undefined>()
   const [connectionEditor, setConnectionEditor] = useState<DashboardCatalog['connections'][number] | null>(null)
   const [connectionModel, setConnectionModel] = useState('')
   const [connectionEnabled, setConnectionEnabled] = useState(true)
@@ -118,6 +121,47 @@ function App() {
     openWizard()
   }
 
+  function openMockupEditor(template: DashboardCatalog['templates'][number]) {
+    setMockupSaveMessage(undefined)
+    setMockupEditor({ template, points: annotationPoints(template.config, true, template.productType) })
+  }
+
+  async function saveMockupAnnotation() {
+    if (!mockupEditor) return
+    try {
+      const { template, points } = mockupEditor
+      const [topLeft, topRight, bottomRight, bottomLeft] = points
+      const box = {
+        x: Math.min(topLeft[0], bottomLeft[0]),
+        y: Math.min(topLeft[1], topRight[1]),
+        width: Math.max(topRight[0], bottomRight[0]) - Math.min(topLeft[0], bottomLeft[0]),
+        height: Math.max(bottomLeft[1], bottomRight[1]) - Math.min(topLeft[1], topRight[1]),
+      }
+      await updateMockupTemplate(template.id, {
+        name: template.name,
+        type: template.kind,
+        productType: template.productType,
+        quantity: template.quantity,
+        config: {
+          ...(template.config ?? {}),
+          renderVersion: 2,
+          quality: 'verified',
+          targetQuad: { topLeft, topRight, bottomRight, bottomLeft, coordinateSpace: 'normalized' },
+          boundingBox: box,
+          shading: { enabled: true, strength: 0.14, highlightStrength: 0.08 },
+        },
+      })
+      const refreshedCatalog = await getDashboardCatalog()
+      setCatalog(refreshedCatalog)
+      const savedTemplate = refreshedCatalog.templates.find((item) => item.id === template.id)
+      if (savedTemplate) setSelectedTemplates((current) => current.map((item) => item.id === savedTemplate.id ? savedTemplate : item))
+      setMockupSaveMessage('Saved. Future deterministic renders will use this calibrated quad.')
+      setMockupEditor(null)
+    } catch (error) {
+      setMockupSaveMessage(error instanceof Error ? error.message : 'Unable to save mockup annotation')
+    }
+  }
+
   async function saveTemplate() {
     if (!templateEditor) return
     try {
@@ -147,7 +191,17 @@ function App() {
 
   async function runConnectionTest() {
     if (!connectionEditor) return
-    try { const response = await testConnection(connectionEditor.id, connectionModel); setConnectionMessage(response.message) } catch (error) { setConnectionMessage(error instanceof Error ? error.message : 'Connection test failed') }
+    try {
+      const response = await testConnection(connectionEditor.id, connectionModel)
+      setConnectionMessage(response.message)
+      if (response.models?.length) {
+        const models = response.models ?? connectionEditor.models
+        const refreshedConnection = { ...connectionEditor, configured: response.ok || models.length > 0, models, defaultModel: models.includes(connectionModel) ? connectionModel : (models[0] ?? connectionEditor.defaultModel) }
+        setConnectionEditor(refreshedConnection)
+        setConnectionModel(refreshedConnection.defaultModel)
+        setCatalog((current) => ({ ...current, connections: current.connections.map((connection) => connection.id === refreshedConnection.id ? refreshedConnection : connection) }))
+      }
+    } catch (error) { setConnectionMessage(error instanceof Error ? error.message : 'Connection test failed') }
   }
 
   function nextStep() {
@@ -258,7 +312,7 @@ function App() {
 
         {activeView === 'dashboard' && <Dashboard catalog={activeCatalog} user={sessionUser} onCreate={openWizard} onAddTemplate={() => openTemplateEditor()} onViewTemplates={() => setActiveView('templates')} onViewHistory={() => setActiveView('workflows')} launched={launched} launchError={launchError} onViewRun={(id) => { if (id) setRunId(id); setActiveView('run') }} onManageConnection={openConnectionEditor} />}
         {activeView === 'workflows' && <Workflows catalog={activeCatalog} onCreate={openWizard} onViewRun={(id) => { setRunId(id); setActiveView('run') }} />}
-        {activeView === 'templates' && <Templates catalog={activeCatalog} onCreate={() => openTemplateEditor()} onEdit={openTemplateEditor} onUse={usePromptTemplate} />}
+        {activeView === 'templates' && <Templates catalog={activeCatalog} onCreate={() => openTemplateEditor()} onEdit={openTemplateEditor} onUse={usePromptTemplate} onEditMockup={openMockupEditor} />}
         {activeView === 'connections' && <Connections catalog={activeCatalog} onManage={openConnectionEditor} />}
         {activeView === 'assets' && <Assets catalog={activeCatalog} onCreate={openWizard} onPreview={(index) => { setLightbox({ sources: activeCatalog.assets.map((asset) => asset.url), index }); setLightboxOpen((open) => !open) }} />}
         {activeView === 'run' && <RunMonitor catalog={activeCatalog} onDashboard={() => setActiveView('dashboard')} runId={runId} />}
@@ -304,6 +358,7 @@ function App() {
         onLaunch={launchWorkflow}
       />}
       {templateEditor && <TemplateEditor template={templateEditor} onChange={setTemplateEditor} onClose={() => setTemplateEditor(null)} onSave={() => void saveTemplate()} onDelete={templateEditor.id ? () => void removeTemplate() : undefined} />}
+      {mockupEditor && <MockupAnnotator editor={mockupEditor} onChange={setMockupEditor} onClose={() => setMockupEditor(null)} onSave={() => void saveMockupAnnotation()} message={mockupSaveMessage} />}
       {connectionEditor && <ConnectionModal connection={connectionEditor} model={connectionModel} enabled={connectionEnabled} message={connectionMessage} onModel={setConnectionModel} onEnabled={setConnectionEnabled} onClose={() => setConnectionEditor(null)} onSave={() => void saveConnection()} onTest={() => void runConnectionTest()} />}
       {lightbox && <FsLightbox toggler={lightboxOpen} sources={lightbox.sources} slide={lightbox.index + 1} onClose={() => { setLightbox(null); setLightboxOpen(false) }} />}
     </div>
@@ -364,8 +419,8 @@ function Workflows({ catalog, onCreate, onViewRun }: { catalog: DashboardCatalog
   return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / run history</div><h1>Run history<span className="heading-period">.</span></h1><p>Open any workflow to inspect live status, jobs, listings and generated results.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> New workflow</button></section><div className="workflow-feature"><div className="workflow-feature-copy"><span className="hero-kicker">Recommended starting point</span><h2>AI designs →<br /><em>marketplace ready.</em></h2><p>A guided production line with approval checkpoints, reusable mockups and destination-aware exports.</p><button className="dark-button" onClick={onCreate}>Use this workflow <span>→</span></button></div><div className="workflow-nodes">{['Create designs', 'Review selection', 'Fan out products', 'Render templates', 'Publish'].map((node, index) => <div className="workflow-node" key={node}><span>{String(index + 1).padStart(2, '0')}</span><strong>{node}</strong>{index < 4 && <i>↓</i>}</div>)}</div></div><div className="section-heading-row"><h3>Past workflow runs <span>{catalog.runs.length}</span></h3><span className="history-hint">Click a row to view results ↗</span></div><section className="workflow-table">{catalog.runs.length ? catalog.runs.map((run) => <button className="workflow-table-row workflow-table-button" key={run.id} onClick={() => onViewRun(run.id)}><div className="run-symbol" style={{ background: run.accent ?? '#6d5ce7' }}>{run.name.slice(0, 1)}</div><div><strong>{run.name}</strong><small>Started {new Date(run.date).toLocaleString()}</small></div><span className="table-detail">{run.detail}</span><span className={`status-badge ${run.status === 'completed' ? 'ready' : run.status.toLowerCase()}`}>{run.status}</span><span className="row-action">↗</span></button>) : <div className="empty-state"><strong>No workflow runs yet.</strong><small>Launch a workflow and it will appear here.</small></div>}</section></div>
 }
 
-function Templates({ catalog, onCreate, onEdit, onUse }: { catalog: DashboardCatalog; onCreate: () => void; onEdit: (template: DashboardCatalog['promptTemplates'][number]) => void; onUse: (template: DashboardCatalog['promptTemplates'][number]) => void }) {
-  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / AI prompt library</div><h1>Prompt templates<span className="heading-period">.</span></h1><p>Save repeatable image prompts and default providers for your next collection.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> Add a template</button></section><div className="prompt-template-grid">{catalog.promptTemplates.map((template, index) => <button className="prompt-template-card" key={template.id} onClick={() => onEdit(template)}><div className={`library-art ${['peach', 'lavender', 'mint', 'sky', 'yellow'][index % 5]}`}><span>✦</span><div>{template.provider.toUpperCase()} · {template.model || 'Default model'}</div></div><div className="prompt-template-body"><div><strong>{template.name}</strong><small>{template.description || template.prompt}</small></div><span className="template-card-actions"><span className="edit-chip">Edit ↗</span><span className="use-chip" onClick={(event) => { event.stopPropagation(); onUse(template) }}>Use</span></span></div></button>)}<button className="empty-library-card" onClick={onCreate}><span>＋</span><strong>Create an AI prompt</strong><small>Save a prompt, provider and model together.</small></button></div></div>
+function Templates({ catalog, onCreate, onEdit, onUse, onEditMockup }: { catalog: DashboardCatalog; onCreate: () => void; onEdit: (template: DashboardCatalog['promptTemplates'][number]) => void; onUse: (template: DashboardCatalog['promptTemplates'][number]) => void; onEditMockup: (template: DashboardCatalog['templates'][number]) => void }) {
+  return <div className="page-wrap"><section className="page-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> Workspace / template library</div><h1>Templates<span className="heading-period">.</span></h1><p>Save repeatable prompts and calibrate deterministic mockups against their real printable area.</p></div><button className="primary-button" onClick={onCreate}><span>＋</span> Add a prompt</button></section><section className="template-library-section"><div className="section-heading-row"><div><span className="section-kicker">AI direction</span><h3>Prompt templates</h3></div><span className="history-hint">{catalog.promptTemplates.length} saved</span></div><div className="prompt-template-grid">{catalog.promptTemplates.map((template, index) => <button className="prompt-template-card" key={template.id} onClick={() => onEdit(template)}><div className={`library-art ${['peach', 'lavender', 'mint', 'sky', 'yellow'][index % 5]}`}><span>✦</span><div>{template.provider.toUpperCase()} · {template.model || 'Default model'}</div></div><div className="prompt-template-body"><div><strong>{template.name}</strong><small>{template.description || template.prompt}</small></div><span className="template-card-actions"><span className="edit-chip">Edit ↗</span><span className="use-chip" onClick={(event) => { event.stopPropagation(); onUse(template) }}>Use</span></span></div></button>)}<button className="empty-library-card" onClick={onCreate}><span>＋</span><strong>Create an AI prompt</strong><small>Save a prompt, provider and model together.</small></button></div></section><section className="template-library-section mockup-library-section"><div className="section-heading-row"><div><span className="section-kicker">Deterministic placement</span><h3>Photographic mockups</h3></div><span className="history-hint">Click Annotate to mark the print area</span></div><div className="deterministic-template-grid">{catalog.templates.filter((template) => template.kind === 'deterministic').map((template) => <div className="deterministic-template-card" key={template.id}><div className="deterministic-preview">{template.previewUrl ? <img src={template.previewUrl} alt="" /> : <span>{template.productType}</span>}<span className={`quality-badge ${template.quality ?? 'legacy-flat'}`}>{template.quality === 'verified' ? 'Verified' : 'Needs annotation'}</span></div><div className="deterministic-template-info"><div><strong>{template.name}</strong><small>{template.productType.replace('-', ' ')} · {template.quality === 'verified' ? 'Perspective calibrated' : 'Legacy rectangle'}</small></div><button className="outline-button small-button" onClick={() => onEditMockup(template)}>Annotate <span>↗</span></button></div></div>)}</div></section></div>
 }
 
 function Connections({ catalog, onManage }: { catalog: DashboardCatalog; onManage: (connection: DashboardCatalog['connections'][number]) => void }) {
@@ -461,6 +516,35 @@ function DestinationRow({ id, selected, onToggle, icon, title, detail, badge, to
 function SummaryStep({ source, selectedProvider, selectedModel, selectedStyle, includeText, prompt, designCount, products, mockups, selectedProducts, destinations }: { source: 'ai' | 'upload'; selectedProvider: string; selectedModel: string; selectedStyle: ImageStyle; includeText: boolean; prompt: string; designCount: number; products: number; mockups: number; selectedProducts: ProductType[]; destinations: string[] }) { return <div className="wizard-form-step summary-step"><span className="big-step-mark">06</span><span className="section-kicker">Ready when you are</span><h2>Your production line<br /><em>looks good.</em></h2><p>We’ll create the workflow, snapshot this configuration as version 01, and queue each unit of work independently.</p><div className="summary-flow"><div className="flow-block"><span>01</span><strong>{source === 'ai' ? 'Generate designs' : 'Import designs'}</strong><small>{source === 'ai' ? `${designCount} variations · ${selectedProvider === 'fal' ? 'Fal.ai' : selectedProvider === 'openrouter' ? 'OpenRouter' : selectedProvider === 'huggingface' ? 'Hugging Face' : selectedProvider === 'ollama' ? `Ollama (${selectedModel || 'x/flux2-klein'})` : 'Local mock'}` : `${designCount} selected assets`}</small></div><i>→</i><div className="flow-block"><span>02</span><strong>Fan out variants</strong><small>{selectedProducts.length} product types · {products} total</small></div><i>→</i><div className="flow-block"><span>03</span><strong>Render mockups</strong><small>{mockups} template outputs</small></div><i>→</i><div className="flow-block"><span>04</span><strong>Deliver</strong><small>{destinations.length} destinations</small></div></div><div className="summary-prompt"><span>Prompt direction</span><strong>{source === 'ai' ? `“${prompt}”` : 'Uploaded design collection'}</strong><small>{source === 'ai' ? `${imageStyleOptions.find((option) => option.id === selectedStyle)?.label} · ${includeText ? 'Text allowed' : 'No text'}` : 'Existing artwork will be preserved'}</small></div><div className="approval-row"><span className="pulse-dot" /><span>Design review checkpoint is enabled</span><span className="approval-policy">Review before mockups</span></div></div> }
 
 type TemplateEditorState = { id?: string; name: string; prompt: string; provider: string; model: string; description: string }
+type AnnotationPoint = [number, number]
+
+function annotationPoints(config: Record<string, unknown> | undefined, useExistingQuad = true, productType?: string): AnnotationPoint[] {
+  const value = (config ?? {}) as { targetQuad?: { topLeft?: AnnotationPoint; topRight?: AnnotationPoint; bottomRight?: AnnotationPoint; bottomLeft?: AnnotationPoint }; boundingBox?: { x?: number; y?: number; width?: number; height?: number } }
+  const quad = value.targetQuad
+  if (useExistingQuad && quad?.topLeft && quad.topRight && quad.bottomRight && quad.bottomLeft) return [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft].map(([x, y]) => [Math.max(0, Math.min(1, x)), Math.max(0, Math.min(1, y))])
+  const fallback = productType === 'phone-case' ? { x: 0.29, y: 0.2, width: 0.42, height: 0.6 } : productType === 'wall-art' ? { x: 0.24, y: 0.16, width: 0.52, height: 0.58 } : productType === 'hoodie' ? { x: 0.18, y: 0.2, width: 0.64, height: 0.52 } : { x: 0.2, y: 0.23, width: 0.6, height: 0.48 }
+  const box = value.boundingBox ?? fallback
+  const x = typeof box.x === 'number' ? box.x : fallback.x
+  const y = typeof box.y === 'number' ? box.y : fallback.y
+  const width = typeof box.width === 'number' ? box.width : fallback.width
+  const height = typeof box.height === 'number' ? box.height : fallback.height
+  return [[x, y], [x + width, y], [x + width, y + height], [x, y + height]].map(([px, py]) => [Math.max(0, Math.min(1, px)), Math.max(0, Math.min(1, py))])
+}
+
+function MockupAnnotator({ editor, onChange, onClose, onSave, message }: { editor: { template: DashboardCatalog['templates'][number]; points: AnnotationPoint[] }; onChange: (editor: { template: DashboardCatalog['templates'][number]; points: AnnotationPoint[] }) => void; onClose: () => void; onSave: () => void; message?: string }) {
+  const [dragging, setDragging] = useState<number | null>(null)
+  const [imageRatio, setImageRatio] = useState(1)
+  const labels = ['Top left', 'Top right', 'Bottom right', 'Bottom left']
+  const updatePoint = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragging === null) return
+    const rect = event.currentTarget.getBoundingClientRect()
+    const x = Math.max(0.01, Math.min(0.99, (event.clientX - rect.left) / rect.width))
+    const y = Math.max(0.01, Math.min(0.99, (event.clientY - rect.top) / rect.height))
+    const points = editor.points.map((point, index) => index === dragging ? [x, y] as AnnotationPoint : point)
+    onChange({ ...editor, points })
+  }
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="simple-modal annotator-modal"><div className="modal-heading"><div><span className="section-kicker">Template authoring · {editor.template.productType.replace('-', ' ')}</span><h2>Calibrate the print area.</h2><p>Drag the four handles around the printable surface. The coordinates are saved normalized to the source image and reused by future runs.</p></div><button className="close-modal" onClick={onClose}>×</button></div><div className="annotator-layout"><div className="annotator-stage" style={{ aspectRatio: String(imageRatio) }} onPointerMove={updatePoint} onPointerUp={() => setDragging(null)} onPointerCancel={() => setDragging(null)}>{editor.template.previewUrl ? <img src={editor.template.previewUrl} alt={editor.template.name} onLoad={(event) => { const image = event.currentTarget; if (image.naturalWidth && image.naturalHeight) setImageRatio(image.naturalWidth / image.naturalHeight) }} /> : <div className="annotator-empty">Preview unavailable</div>}<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Printable area annotation">{[editor.points.map(([x, y]) => `${x * 100},${y * 100}`).join(' ')].map((points) => <polygon key={points} points={points} />)}{editor.points.map(([x, y], index) => <circle key={index} data-point={index} cx={x * 100} cy={y * 100} r="2.3" onPointerDown={(event) => { event.stopPropagation(); setDragging(index); event.currentTarget.ownerSVGElement?.parentElement?.setPointerCapture(event.pointerId) }} />)}</svg>{editor.points.map(([x, y], index) => <span className="annotator-point-label" key={labels[index]} style={{ left: `${x * 100}%`, top: `${y * 100}%` }}>{index + 1}</span>)}</div><div className="annotator-sidebar"><div className="annotator-callout"><strong>What to mark</strong><p>Follow the visible product surface, not the full garment outline. Keep the quad inside collars, sleeves, camera cutouts, frames and hands.</p></div><div className="annotator-points">{editor.points.map(([x, y], index) => <div key={labels[index]}><span className="point-number">{index + 1}</span><span><strong>{labels[index]}</strong><small>{Math.round(x * 100)}% × {Math.round(y * 100)}%</small></span></div>)}</div><button className="outline-button" onClick={() => onChange({ ...editor, points: annotationPoints(editor.template.config, false, editor.template.productType) })}>Reset to default rectangle</button>{message && <div className="info-note"><span>✧</span><span>{message}</span></div>}</div></div><div className="modal-actions"><span className="annotator-hint">Saved as a perspective quad · render version 2</span><button className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" onClick={onSave}>Save calibration <span>↗</span></button></div></div></div>
+}
 
 function TemplateEditor({ template, onChange, onClose, onSave, onDelete }: { template: TemplateEditorState; onChange: (template: TemplateEditorState | null) => void; onClose: () => void; onSave: () => void; onDelete?: () => void }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="simple-modal"><div className="modal-heading"><div><span className="section-kicker">{template.id ? 'Edit template' : 'New template'}</span><h2>{template.id ? 'Refine your prompt.' : 'Save an AI prompt.'}</h2><p>Keep the prompt, provider and preferred model together for repeatable generations.</p></div><button className="close-modal" onClick={onClose}>×</button></div><div className="modal-form"><label>Template name<input value={template.name} onChange={(event) => onChange({ ...template, name: event.target.value })} placeholder="e.g. Editorial cat collection" /></label><label>Description<input value={template.description} onChange={(event) => onChange({ ...template, description: event.target.value })} placeholder="What this prompt is best for" /></label><label>AI prompt<textarea value={template.prompt} onChange={(event) => onChange({ ...template, prompt: event.target.value })} rows={6} placeholder="Describe the image collection..." /></label><div className="form-columns"><label>Provider<select value={template.provider} onChange={(event) => onChange({ ...template, provider: event.target.value, model: event.target.value === 'ollama' ? 'x/flux2-klein' : event.target.value === 'huggingface' ? 'black-forest-labs/FLUX.2-klein-9B' : template.model })}><option value="fal">Fal.ai</option><option value="openrouter">OpenRouter</option><option value="huggingface">Hugging Face</option><option value="ollama">Ollama</option><option value="mock">Local mock</option></select></label><label>Default model<input value={template.model} onChange={(event) => onChange({ ...template, model: event.target.value })} placeholder="Provider model ID" /></label></div></div><div className="modal-actions">{onDelete && <button className="text-button danger-button" onClick={onDelete}>Delete template</button>}<span /><button className="outline-button" onClick={onClose}>Cancel</button><button className="primary-button" disabled={!template.name.trim() || !template.prompt.trim()} onClick={onSave}>Save template <span>↗</span></button></div></div></div>

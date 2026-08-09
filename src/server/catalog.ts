@@ -5,6 +5,7 @@ import { storage } from './storage'
 import { workspaceForUser } from './auth'
 import { config } from './config'
 import { mockupTemplatePreviewPath } from './mockup-library'
+import { discoverOllamaImageModels, chooseInstalledOllamaModel } from './ollama'
 
 const artPalettes = [
   { background: 'linear-gradient(135deg, #f5b47e 0%, #ffdcb0 100%)', accent: '#45251b', icon: '☾' },
@@ -32,18 +33,21 @@ export async function dashboardCatalog(userId: string) {
   const promptLibrary = await db.select().from(promptTemplates).where(eq(promptTemplates.workspaceId, workspace.id)).orderBy(desc(promptTemplates.createdAt)).limit(50)
   const savedConnections = await db.select().from(workspaceConnections).where(eq(workspaceConnections.workspaceId, workspace.id))
   const jobsByRun = runIds.length ? await db.select().from(jobs).where(inArray(jobs.runId, runIds)) : []
+  const ollama = await discoverOllamaImageModels()
+  const ollamaModels = ollama.models.map((model) => model.name)
+  const ollamaDefaultModel = chooseInstalledOllamaModel(ollama.models)
   return {
     stats: { workflows: workspaceWorkflows.length, assets: workspaceAssets.length, readyListings: workspaceListings.filter((listing) => listing.status === 'ready' || listing.status === 'draft').length },
     connections: [
       { id: 'openrouter', name: 'OpenRouter', configured: Boolean(config.OPENROUTER_API_KEY), enabled: savedConnections.find((item) => item.provider === 'openrouter')?.enabled !== 'false', detail: 'Image generation · credits required', defaultModel: savedConnections.find((item) => item.provider === 'openrouter')?.defaultModel ?? config.OPENROUTER_IMAGE_MODEL, models: [config.OPENROUTER_IMAGE_MODEL] },
       { id: 'fal', name: 'Fal.ai', configured: Boolean(config.FAL_API_KEY), enabled: savedConnections.find((item) => item.provider === 'fal')?.enabled !== 'false', detail: 'Image generation · Flux Schnell', defaultModel: savedConnections.find((item) => item.provider === 'fal')?.defaultModel ?? config.FAL_IMAGE_MODEL, models: [config.FAL_IMAGE_MODEL] },
       { id: 'huggingface', name: 'Hugging Face', configured: Boolean(config.HUGGINGFACE_TOKEN), enabled: savedConnections.find((item) => item.provider === 'huggingface')?.enabled !== 'false', detail: 'Inference API · text to image', defaultModel: savedConnections.find((item) => item.provider === 'huggingface')?.defaultModel ?? config.HUGGINGFACE_IMAGE_MODEL, models: [config.HUGGINGFACE_IMAGE_MODEL, 'black-forest-labs/FLUX.2-klein-9B'] },
-      { id: 'ollama', name: 'Ollama', configured: config.OLLAMA_CONFIGURED, enabled: savedConnections.find((item) => item.provider === 'ollama')?.enabled !== 'false', detail: 'Local inference · test connection before running', defaultModel: savedConnections.find((item) => item.provider === 'ollama')?.defaultModel ?? config.OLLAMA_IMAGE_MODEL, models: [config.OLLAMA_IMAGE_MODEL, config.OLLAMA_IMAGE_MODEL_9B] },
+      { id: 'ollama', name: 'Ollama', configured: ollama.reachable && ollamaModels.length > 0, enabled: savedConnections.find((item) => item.provider === 'ollama')?.enabled !== 'false', detail: ollama.reachable ? (ollamaModels.length ? `${ollamaModels.length} local image model${ollamaModels.length === 1 ? '' : 's'} available` : 'Reachable · pull an x/ image model to enable') : `Local service unavailable at ${ollama.baseUrl}`, defaultModel: savedConnections.find((item) => item.provider === 'ollama' && ollamaModels.includes(item.defaultModel))?.defaultModel ?? ollamaDefaultModel, models: ollamaModels },
       { id: 'storage', name: config.STORAGE_DRIVER === 's3' ? 'S3-compatible storage' : 'Local storage', configured: true, enabled: true, detail: 'Asset persistence', defaultModel: '', models: [] },
     ],
     runs: workspaceRuns.map((run, index) => ({ id: run.id, name: workspaceWorkflows.find((workflow) => workflow.id === run.workflowId)?.name ?? 'Production run', detail: `${run.config && typeof run.config === 'object' && 'count' in run.config ? run.config.count : 0} designs · ${run.config && typeof run.config === 'object' && 'products' in run.config && Array.isArray(run.config.products) ? run.config.products.length : 0} products`, status: run.status, progress: run.progressPercent, date: run.createdAt, ...palette(index), jobs: jobsByRun.filter((job) => job.runId === run.id).map((job) => ({ id: job.id, stepName: job.stepName, status: job.status, errorLog: job.errorLog })) })),
     assets: await Promise.all(workspaceAssets.map(async (asset, index) => ({ id: asset.id, name: asset.name, type: asset.type, contentType: asset.contentType, url: await storage.getPublicUrl(asset.storagePath), ...palette(index), createdAt: asset.createdAt }))),
-    templates: templates.map((template, index) => ({ id: template.id, name: template.name, kind: template.type, productType: template.productType, quantity: Number((template.config as { quantity?: number })?.quantity ?? 1), config: template.config as Record<string, unknown>, previewUrl: mockupTemplatePreviewPath(template.config), ...palette(index) })),
+    templates: templates.map((template, index) => { const templateConfig = template.config as { quantity?: number; quality?: 'legacy-flat' | 'draft' | 'verified' | 'generative-only' }; return { id: template.id, name: template.name, kind: template.type, productType: template.productType, quantity: Number(templateConfig?.quantity ?? 1), config: template.config as Record<string, unknown>, previewUrl: mockupTemplatePreviewPath(template.config), quality: templateConfig?.quality ?? (template.type === 'deterministic' ? 'legacy-flat' : 'generative-only'), ...palette(index) } }),
     promptTemplates: promptLibrary,
     listings: workspaceListings.map((listing, index) => { const variant = variants.find((item) => item.id === listing.productVariantId); const metadata = listing.metadata as { title?: string; tags?: string[] }; return { id: listing.id, title: metadata.title ?? `${variant?.productType ?? 'Product'} listing`, type: variant?.productType ?? 'product', status: listing.status, tags: metadata.tags ?? [], ...palette(index) } }),
   }

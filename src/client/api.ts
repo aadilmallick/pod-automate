@@ -40,7 +40,7 @@ export interface DashboardCatalog {
   promptTemplates: Array<{ id: string; workspaceId: string; name: string; prompt: string; provider: string; model?: string | null; description?: string | null; createdAt: string; updatedAt: string }>
   runs: Array<{ id: string; name: string; detail: string; status: string; progress: number; date: string; accent: string; jobs: Array<{ id: string; stepName: string; status: string; errorLog?: string | null }> }>
   assets: Array<{ id: string; name: string; type: string; contentType: string; url: string; background: string; accent: string; icon: string; createdAt: string }>
-  templates: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: ProductType; quantity: number; config?: Record<string, unknown>; previewUrl?: string; background: string; accent: string; icon: string }>
+  templates: Array<{ id: string; name: string; kind: 'deterministic' | 'generative'; productType: ProductType; quantity: number; config?: Record<string, unknown>; previewUrl?: string; quality?: 'legacy-flat' | 'draft' | 'verified' | 'generative-only'; background: string; accent: string; icon: string }>
   listings: Array<{ id: string; title: string; type: string; status: string; tags: string[]; background: string; accent: string; icon: string }>
 }
 export function getAuthStatus() { return request<{ mode: 'development' | 'google'; googleConfigured: boolean; authenticated: boolean; user: SessionUser | null }>('/api/auth/status') }
@@ -55,4 +55,5 @@ export function createPromptTemplate(input: { name: string; prompt: string; prov
 export function updatePromptTemplate(id: string, input: { name: string; prompt: string; provider: string; model?: string; description?: string }) { return request<{ template: DashboardCatalog['promptTemplates'][number] }>(`/api/prompt-templates/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
 export function deletePromptTemplate(id: string) { return request<{ ok: boolean }>(`/api/prompt-templates/${id}`, { method: 'DELETE' }) }
 export function updateConnection(id: string, input: { defaultModel: string; enabled: boolean }) { return request<{ connection: { id: string; provider: string; defaultModel: string; enabled: string } }>(`/api/connections/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }
-export function testConnection(provider: string, model: string) { return request<{ ok: boolean; provider: string; model: string; message: string }>('/api/connections/test', { method: 'POST', body: JSON.stringify({ provider, model }) }) }
+export function testConnection(provider: string, model: string) { return request<{ ok: boolean; provider: string; model: string; message: string; models?: string[] }>('/api/connections/test', { method: 'POST', body: JSON.stringify({ provider, model }) }) }
+export function updateMockupTemplate(id: string, input: { name: string; type: 'deterministic' | 'generative'; productType: ProductType; quantity: number; config: Record<string, unknown> }) { return request<{ template: DashboardCatalog['templates'][number] }>(`/api/mockup-templates/${id}`, { method: 'PUT', body: JSON.stringify(input) }) }

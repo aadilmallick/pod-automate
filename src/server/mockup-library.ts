@@ -24,6 +24,12 @@ export interface DeterministicTemplateConfig {
   boundingBox?: { x: number; y: number; width: number; height: number; rotateDeg?: number }
   blend?: 'over' | 'multiply' | 'screen' | 'soft-light'
   designOpacity?: number
+  renderVersion?: 1 | 2
+  quality?: 'legacy-flat' | 'draft' | 'verified' | 'generative-only'
+  targetQuad?: { topLeft: [number, number]; topRight: [number, number]; bottomRight: [number, number]; bottomLeft: [number, number]; coordinateSpace?: 'normalized' | 'pixels' }
+  printMaskPath?: string
+  occlusionMaskPath?: string
+  shading?: { enabled?: boolean; strength?: number; highlightStrength?: number }
 }
 
 export const mockupAssetRoot = resolve(fileURLToPath(new URL('../../download_mockups/', import.meta.url)))
@@ -115,7 +121,7 @@ function placementProfile(template: DownloadedMockupTemplate) {
 }
 
 export function configForDownloadedTemplate(template: DownloadedMockupTemplate): DeterministicTemplateConfig {
-  return { assetPath: template.assetPath, sourceKey: template.sourceKey, sourceTitle: template.title, boundingBox: placementProfile(template), quantity: 1 }
+  return { assetPath: template.assetPath, sourceKey: template.sourceKey, sourceTitle: template.title, boundingBox: placementProfile(template), quantity: 1, renderVersion: 1, quality: 'legacy-flat' }
 }
 
 export function parseTemplateConfig(value: unknown): DeterministicTemplateConfig {
