@@ -18,6 +18,7 @@
     "@aws-sdk/client-s3": "^3.637.0",
     "@hono/node-server": "^1.12.1",
     "@huggingface/inference": "^4.13.25",
+    "@imgly/background-removal-node": "^1.4.5",
     "archiver": "^7.0.1",
     "bullmq": "^5.12.0",
     "cors": "^2.8.5",

@@ -74,3 +74,19 @@ export function buildMockupPrompt({ templateName, productType, designPrompt, sty
     `Avoid: ${negative}, warped garment, floating product, impossible folds, extra products, mannequin anatomy, hands covering the artwork, unreadable or invented branding.`,
   ].join(' ')
 }
+
+export function buildGeminiMockupPrompt({ templateName, productType, includeText }: { templateName: string; productType: string; includeText: boolean }) {
+  const textRule = includeText
+    ? 'Preserve every intentional word and character exactly, including spelling, typography, placement, and orientation.'
+    : 'The artwork contains no intentional text. Do not add any words, letters, logos, labels, or branding.'
+  return [
+    `Create a premium photorealistic ecommerce mockup of a ${productType}, using “${templateName}” as the scene direction.`,
+    'The supplied image is immutable source artwork and must be reproduced as the exact print artwork on the product, not treated as inspiration.',
+    'Preserve every visible shape, line, color, proportion, composition, edge, texture, and intentional character from the source image.',
+    'Do not redesign, redraw, restyle, simplify, extend, mirror, crop, recolor, or substitute any part of the artwork.',
+    `${textRule}`,
+    'Only apply perspective warping, physical occlusion, lighting, shadows, highlights, and material texture response when strictly required to integrate the unchanged artwork naturally with the product surface.',
+    'Keep the complete artwork readable and make the product the photographic hero. Use believable materials, seams, folds, reflections, print absorption, scale, and contact shadows.',
+    'Use clean commercial lighting, a coherent camera angle, generous breathing room, and a tasteful environment without distracting props, invented branding, extra products, or elements covering the artwork.',
+  ].join(' ')
+}

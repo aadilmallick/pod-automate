@@ -87,6 +87,8 @@ async function ensureWorkspace(userId: string) {
     { provider: 'openrouter', defaultModel: config.OPENROUTER_IMAGE_MODEL },
     { provider: 'huggingface', defaultModel: config.HUGGINGFACE_IMAGE_MODEL },
     { provider: 'ollama', defaultModel: config.OLLAMA_IMAGE_MODEL },
+    { provider: 'gemini', defaultModel: config.GEMINI_MOCKUP_MODEL },
+    { provider: 'bg-removal', defaultModel: config.TRANSFORM_DRIVER },
   ]
   const missingConnections = defaultConnections.filter((connection) => !existingConnections.some((item) => item.provider === connection.provider))
   if (missingConnections.length) await db.insert(workspaceConnections).values(missingConnections.map((connection) => ({ workspaceId: workspace.id, ...connection })))

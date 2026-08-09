@@ -5,3 +5,4 @@ dist/
 .env.prod
 .playwright
 data/
+.gstack/

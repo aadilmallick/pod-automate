@@ -50,16 +50,23 @@ export interface MarketplaceListingPayload {
   description: string
   tags: string[]
   price: number
-  mainImageBuffer: Buffer
-  mockupImageBuffers: Buffer[]
-  sku?: string
-  category?: string
+  quantity: number
+  taxonomyId: number
+  shippingProfileId: number
+  readinessStateId: number
+  whoMade: 'i_did' | 'collective' | 'someone_else'
+  whenMade: string
+  isSupply: boolean
+  sku: string
+  images: Array<{ buffer: Buffer; contentType: string; filename: string }>
 }
+
+export interface MarketplaceContext { accessToken: string; shopId: string }
 
 export interface MarketplaceAdapter {
   readonly id: string
-  authenticate(credentials: Record<string, string>): Promise<boolean>
-  getRequirements(): { maxTitleLength: number; requiredImageDimensions: { width: number; height: number } }
-  createDraftListing(payload: MarketplaceListingPayload): Promise<{ externalListingId: string; draftUrl: string }>
-  publishListing(externalListingId: string): Promise<{ success: boolean; url: string }>
+  getRequirements(): { maxTitleLength: number; maxTags: number; maxImages: number }
+  createDraftListing(context: MarketplaceContext, payload: MarketplaceListingPayload): Promise<{ externalListingId: string; draftUrl: string; raw: unknown }>
+  updateDraftListing(context: MarketplaceContext, externalListingId: string, payload: MarketplaceListingPayload): Promise<{ externalListingId: string; draftUrl: string; raw: unknown }>
+  publishListing(context: MarketplaceContext, externalListingId: string): Promise<{ success: boolean; url: string; raw: unknown }>
 }

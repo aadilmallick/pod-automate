@@ -23,6 +23,9 @@ const envSchema = z.object({
   OPENROUTER_IMAGE_MODEL: z.string().default('google/gemini-3.1-flash-image'),
   FAL_API_KEY: z.string().optional(),
   FAL_IMAGE_MODEL: z.string().default('fal-ai/flux/schnell'),
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MOCKUP_MODEL: z.string().default('gemini-3-pro-image'),
+  MOCKUP_AI_PROVIDER: z.enum(['gemini']).default('gemini'),
   HUGGINGFACE_TOKEN: z.string().optional(),
   HUGGINGFACE_IMAGE_MODEL: z.string().default('black-forest-labs/FLUX.2-klein-9B'),
   // Ollama is intentionally usable with no .env entry: the SDK defaults to the local service.
@@ -31,6 +34,10 @@ const envSchema = z.object({
   OLLAMA_IMAGE_MODEL_9B: z.string().default('x/flux2-klein:9b'),
   OLLAMA_IMAGE_MODEL_PREFIX: z.string().default('x/'),
   AI_PROVIDER: z.enum(['openrouter', 'fal', 'huggingface', 'ollama', 'mock']).default('openrouter'),
+  // Artwork preparation (background removal + conform/resize)
+  TRANSFORM_DRIVER: z.enum(['auto', 'sharp', 'imgly', 'none']).default('auto'),
+  TRANSFORM_MODEL_CACHE_DIR: z.string().default('./data/model-cache'),
+  TRANSFORM_MAX_DIMENSIONS: z.coerce.number().int().min(256).max(8192).default(2400),
   STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
   STORAGE_DIR: z.string().default('./data/uploads'),
   PUBLIC_ASSET_URL: z.string().url().optional(),
@@ -39,6 +46,10 @@ const envSchema = z.object({
   S3_BUCKET: z.string().default('pod-assets'),
   S3_ACCESS_KEY: z.string().default('minioadmin'),
   S3_SECRET_KEY: z.string().default('minioadmin'),
+  ETSY_KEYSTRING: z.string().optional(),
+  ETSY_SHARED_SECRET: z.string().optional(),
+  ETSY_REDIRECT_URI: z.string().url().optional(),
+  MARKETPLACE_TOKEN_ENCRYPTION_KEY: z.string().optional().refine((value) => !value || Buffer.from(value, 'base64').length === 32, 'must encode exactly 32 bytes'),
 }).parse(process.env)
 
 const publicApiPort = envSchema.API_PUBLIC_PORT ?? envSchema.PORT
@@ -52,6 +63,8 @@ export const config = {
   WEB_URL: webUrl,
   GOOGLE_REDIRECT_URI: envSchema.GOOGLE_REDIRECT_URI ?? `${appUrl}/api/auth/google/callback`,
   PUBLIC_ASSET_URL: envSchema.PUBLIC_ASSET_URL ?? `${appUrl}/uploads`,
+  ETSY_REDIRECT_URI: envSchema.ETSY_REDIRECT_URI ?? `${appUrl}/api/marketplaces/etsy/oauth/callback`,
+  ETSY_CONFIGURED: Boolean(envSchema.ETSY_KEYSTRING && envSchema.ETSY_SHARED_SECRET && envSchema.MARKETPLACE_TOKEN_ENCRYPTION_KEY),
 }
 
 if (config.NODE_ENV === 'production' && config.AUTH_MODE !== 'google') {
