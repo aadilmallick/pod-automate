@@ -18,7 +18,8 @@ fi
 
 echo "==> Starting Redis if not already responding"
 if ! redis-cli ping >/dev/null 2>&1; then
-  sudo redis-server --daemonize yes
+  mkdir -p "$REPO_ROOT/data"
+  redis-server --daemonize yes --dir "$REPO_ROOT/data"
 fi
 
 echo "==> Waiting for PostgreSQL to accept connections"
