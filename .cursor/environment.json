@@ -1,0 +1,23 @@
+{
+  "name": "Pod Automator",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "api",
+      "command": "npm run dev:api"
+    },
+    {
+      "name": "worker",
+      "command": "npm run dev:worker"
+    },
+    {
+      "name": "web",
+      "command": "npm run dev"
+    }
+  ],
+  "ports": [
+    { "name": "web", "port": 5173 },
+    { "name": "api", "port": 3000 }
+  ]
+}
